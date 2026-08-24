@@ -5,12 +5,18 @@ An MCP bridge that lets a coding agent drive a live [Sandbox](https://sbox.game)
 ## Install
 
 ```
-claude mcp add sandbox -- npx -y @marsz/sandbox-bridge
+claude mcp add --scope user sandbox -- npx -y @marsz/sandbox-bridge
 ```
 
 That's the whole install. Claude Code launches the bridge itself at the start of
 each session and stops it at the end — there is no process to run, no service to
 install, and nothing to uninstall. Requires Node 18+.
+
+`--scope user` is not optional. `claude mcp add` defaults to *local* scope, which
+registers the server only for the directory you ran it in. Playing a game is not a
+project, so you have no directory to be in — without `--scope user` the server
+works in whatever folder you happened to be in and appears to vanish everywhere
+else.
 
 Then, in the game console:
 
@@ -97,5 +103,5 @@ node index.js      # logs to stderr; stdout is the MCP channel
 Point a local Claude Code at your checkout instead of npm with:
 
 ```
-claude mcp add sandbox -- node /absolute/path/to/Bridge/index.js
+claude mcp add --scope user sandbox -- node /absolute/path/to/Bridge/index.js
 ```
