@@ -1,0 +1,80 @@
+@using Sandbox;
+@using Sandbox.UI;
+@inherits UtilityPage
+@namespace Sandbox
+@attribute [Icon( "🔌" )]
+@attribute [Title( "#spawnmenu.utility.agent" )]
+@attribute [Group( "#spawnmenu.utility.group.utilities" )]
+@attribute [Order( 10 )]
+
+<root class="page" style="flex-direction: column;">
+
+    <div class="control-row" Tooltip=@EnabledDescription @onclick=@ToggleEnabled>
+        <div class="left"><label>@(AgentBridge.Enabled ? "🟢" : "🔴") </label><label>#spawnmenu.utility.agent_enabled</label></div>
+        <div style="flex-grow: 1;"></div>
+        <label class="right">@(AgentBridge.Enabled ? "#spawnmenu.common.on" : "#spawnmenu.common.off")</label>
+    </div>
+
+    <div class="control-row">
+        <div class="left"><label>@(AgentBridge.IsLinked ? "🔗" : "⚪") </label><label>#spawnmenu.utility.agent_status</label></div>
+        <div style="flex-grow: 1;"></div>
+        <label class="right">@StatusText</label>
+    </div>
+
+    <div class="section-header">#spawnmenu.utility.agent_setup</div>
+
+    <div class="control-row" Tooltip=@CommandTooltip @onclick=@CopyCommand>
+        <div class="left"><label>📋 </label><label>@CopyLabel</label></div>
+    </div>
+
+    <div class="control-row">
+        <label class="left" style="font-size: 12px; opacity: 0.6;">@InstallCommand</label>
+    </div>
+
+</root>
+
+@code
+{
+    /// <summary>
+    /// What the player pastes into their terminal. Claude Code launches the bridge
+    /// itself from then on, so there is no process for them to run or manage.
+    /// </summary>
+    const string InstallCommand = "claude mcp add sandbox -- npx -y @marsz/sandbox-bridge";
+
+    static readonly string EnabledDescription = "#spawnmenu.utility.agent_enabled_description";
+    static readonly string CommandTooltip = "#spawnmenu.utility.agent_copy_description";
+
+    /// <summary>Reverts to the normal label a moment after copying.</summary>
+    RealTimeSince timeSinceCopied = 1000f;
+
+    bool JustCopied => timeSinceCopied < 2f;
+
+    string CopyLabel => JustCopied ? "#spawnmenu.utility.agent_copied" : "#spawnmenu.utility.agent_copy";
+
+    string StatusText => AgentBridge.IsLinked
+        ? "#spawnmenu.utility.agent_connected"
+        : AgentBridge.Enabled
+            ? "#spawnmenu.utility.agent_waiting"
+            : "#spawnmenu.common.off";
+
+    void ToggleEnabled()
+    {
+        // a local preference, not a server setting - each player decides whether
+        // their own client talks to a bridge
+        ConsoleSystem.Run( "sb.bridge", !AgentBridge.Enabled );
+
+        if ( AgentBridge.Enabled )
+            ConsoleSystem.Run( "bridge_connect" );
+
+        StateHasChanged();
+    }
+
+    void CopyCommand()
+    {
+        Clipboard.SetText( InstallCommand );
+        timeSinceCopied = 0f;
+        StateHasChanged();
+    }
+
+    protected override int BuildHash() => HashCode.Combine( AgentBridge.Enabled, AgentBridge.IsLinked, JustCopied );
+}
