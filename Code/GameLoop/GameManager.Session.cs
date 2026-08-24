@@ -46,12 +46,12 @@ public sealed partial class GameManager
 	}
 
 	/// <summary>
-	/// Join someone else's session, leaving the current one first. With no argument this
-	/// picks the best available lobby for this game.
-	/// Usage: join [lobby]
+	/// Join a session, leaving the current one first. Accepts a lobby id (a bare number,
+	/// from <c>gameservers</c>) or a network address like <c>1.2.3.4:27015</c>. With no
+	/// argument, picks the best available lobby for this game.
 	/// </summary>
-	[ConCmd( "join", Help = "Join a session. With no argument, picks the best lobby for this game. Usage: join [lobby]" )]
-	public static void JoinCommand( string lobby = null )
+	[ConCmd( "join", Help = "Join a session by lobby id or address. No argument picks the best lobby." )]
+	public static void JoinCommand( string target = null )
 	{
 		if ( Networking.IsActive )
 		{
@@ -59,15 +59,26 @@ public sealed partial class GameManager
 			Networking.Disconnect();
 		}
 
-		if ( string.IsNullOrWhiteSpace( lobby ) )
+		target = target?.Trim();
+
+		if ( string.IsNullOrWhiteSpace( target ) )
 		{
 			Log.Info( "Looking for a lobby to join..." );
 			Networking.JoinBestLobby( Game.Ident );
 			return;
 		}
 
-		Log.Info( $"Connecting to '{lobby}'..." );
-		Networking.Connect( lobby );
+		// A bare number is a lobby id. Anything else is a network address, which
+		// Connect resolves as a host and defaults to port 27015.
+		if ( ulong.TryParse( target, out var lobbyId ) )
+		{
+			Log.Info( $"Joining lobby {lobbyId}..." );
+			Networking.Connect( lobbyId );
+			return;
+		}
+
+		Log.Info( $"Connecting to address {target}..." );
+		Networking.Connect( target );
 	}
 
 	/// <summary>
