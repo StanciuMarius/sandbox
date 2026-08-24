@@ -86,6 +86,7 @@ public sealed partial class GameManager
 
 		Log.Info( $"Server   : {Networking.ServerName} ({Connection.All.Count()}/{Networking.MaxPlayers})" );
 		Log.Info( $"You are  : {(Networking.IsHost ? "the host" : "a client")}" );
+		Log.Info( $"Map      : {Networking.MapName}" );
 		Log.Info( $"Join code: {host}" );
 		Log.Info( $"Others join with:  join {host}" );
 	}
@@ -107,28 +108,28 @@ public sealed partial class GameManager
 	}
 
 	/// <summary>
-	/// TEMPORARY: probe which members LobbyInformation actually exposes.
+	/// List the servers running this game. Note: only dedicated servers show up here —
+	/// peer-to-peer lobbies (an editor hitting Play) are not discoverable this way.
 	/// </summary>
-	[ConCmd( "lobbydump", Help = "Debug: dump all visible lobbies." )]
-	public static async void LobbyDumpCommand()
+	[ConCmd( "gameservers", Help = "List joinable dedicated servers running this game." )]
+	public static async void ServersCommand()
 	{
 		var lobbies = await Networking.QueryLobbies( default );
-		Log.Info( $"QueryLobbies returned {lobbies?.Count ?? 0} lobbies" );
-		if ( lobbies is null ) return;
+
+		if ( lobbies is null || lobbies.Count == 0 )
+		{
+			Log.Info( "No servers found." );
+			return;
+		}
+
+		Log.Info( $"{lobbies.Count} server(s):" );
 
 		foreach ( var lobby in lobbies )
 		{
-			Log.Info( "--- lobby ---" );
-			Log.Info( "Ping = " + lobby.Ping );
-			Log.Info( "IsFull = " + lobby.IsFull );
-			Log.Info( "IsHidden = " + lobby.IsHidden );
-			Log.Info( "LobbyId = " + lobby.LobbyId );
-			Log.Info( "Name = " + lobby.Name );
-			Log.Info( "OwnerId = " + lobby.OwnerId );
-			Log.Info( "Members = " + lobby.Members );
-			Log.Info( "MaxMembers = " + lobby.MaxMembers );
-			Log.Info( "Map = " + lobby.Map );
-			Log.Info( "Data = " + lobby.Data );
+			var map = string.IsNullOrEmpty( lobby.Map ) ? "?" : lobby.Map;
+			Log.Info( $"  {lobby.LobbyId}  {lobby.Members}/{lobby.MaxMembers}  {lobby.Ping}ms  [{map}]  {lobby.Name}" );
 		}
+
+		Log.Info( "Join one with:  join <id>" );
 	}
 }
