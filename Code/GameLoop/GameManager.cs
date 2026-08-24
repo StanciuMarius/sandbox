@@ -9,10 +9,13 @@ public sealed partial class GameManager : GameObjectSystem<GameManager>, Compone
 
 	void ISceneStartup.OnHostInitialize()
 	{
-		if ( !Networking.IsActive )
+		if ( !AutoHost )
 		{
-			Networking.CreateLobby( new Sandbox.Network.LobbyConfig() { Privacy = Sandbox.Network.LobbyPrivacy.Public, MaxPlayers = 32, Name = "Sandbox", DestroyWhenHostLeaves = true } );
+			Log.Info( "sb.autohost is off - not hosting. Use 'join' to connect to a session, or 'hostgame' to host one." );
+			return;
 		}
+
+		HostLobby();
 	}
 
 	internal void Notify( string text )
