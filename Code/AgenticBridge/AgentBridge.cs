@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -25,12 +27,42 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 	public static bool Enabled { get; set; } = false;
 
 	/// <summary>
-	/// Where the bridge is listening. Must be a hostname, not an IP literal -
-	/// Http.HasAllowedScheme rejects raw addresses - and localhost is limited to
-	/// ports 80/443/8080/8443.
+	/// Explicit bridge URL, overriding the port search. Must be a hostname, not an
+	/// IP literal - Http.HasAllowedScheme rejects raw addresses - and localhost is
+	/// limited to ports 80/443/8080/8443.
 	/// </summary>
-	[ConVar( "sb.bridge_url", ConVarFlags.Saved, Help = "WebSocket URL of the local agent bridge." )]
-	public static string Url { get; set; } = "ws://localhost:8080/";
+	[ConVar( "sb.bridge_url", ConVarFlags.Saved, Help = "Explicit agent bridge URL. Empty tries the allowed local ports in order." )]
+	public static string Url { get; set; } = "";
+
+	/// <summary>
+	/// The only ports localhost is reachable on, in the order we try them. 8080 first
+	/// because 80 and 443 need elevation to bind on Windows, so a bridge is unlikely
+	/// to be there. A busy port fails the upgrade and we move on to the next.
+	/// </summary>
+	private static readonly string[] LocalCandidates =
+	{
+		"ws://localhost:8080/",
+		"ws://localhost:8443/",
+		"ws://localhost:80/",
+		"ws://localhost:443/"
+	};
+
+	/// <summary>Last URL that worked, tried first next time so we stop re-scanning.</summary>
+	private string _lastGood;
+
+	private IEnumerable<string> Candidates
+	{
+		get
+		{
+			if ( !string.IsNullOrWhiteSpace( Url ) )
+				return new[] { Url };
+
+			if ( string.IsNullOrWhiteSpace( _lastGood ) )
+				return LocalCandidates;
+
+			return new[] { _lastGood }.Concat( LocalCandidates.Where( x => x != _lastGood ) );
+		}
+	}
 
 	private const float RetrySeconds = 5f;
 
@@ -78,7 +110,11 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 	[ConCmd( "bridge_status", Help = "Report agent bridge connection state." )]
 	public static void StatusCommand()
 	{
-		Log.Info( $"[bridge] enabled={Enabled} url={Url} connected={IsLinked} verbs={AgentVerbs.All.Count}" );
+		var target = !string.IsNullOrWhiteSpace( Url ) ? Url
+			: Current?._lastGood is { Length: > 0 } last ? $"{last} (auto)"
+			: "auto";
+
+		Log.Info( $"[bridge] enabled={Enabled} url={target} connected={IsLinked} verbs={AgentVerbs.All.Count}" );
 	}
 
 	/// <summary>
@@ -93,39 +129,60 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 
 		while ( Current == this && !ct.IsCancellationRequested )
 		{
-			try
+			foreach ( var url in Candidates )
 			{
-				using var socket = new WebSocket();
+				if ( Current != this || ct.IsCancellationRequested )
+					return;
 
-				socket.OnMessageReceived += OnMessage;
-				socket.OnDisconnected += ( status, reason ) => Log.Info( $"[bridge] disconnected: {status} {reason}" );
-
-				await socket.Connect( Url, ct );
-
-				_socket = socket;
-				Log.Info( $"[bridge] connected to {Url}" );
-
-				await SendHelloAsync();
-
-				// hold the socket open; OnMessage does the real work
-				while ( Current == this && socket.IsConnected && !ct.IsCancellationRequested )
-				{
-					await GameTask.DelayRealtimeSeconds( 0.25f );
-				}
-			}
-			catch ( Exception e ) when ( !ct.IsCancellationRequested )
-			{
-				Log.Info( $"[bridge] link failed ({e.GetType().Name}: {e.Message}) - retrying in {RetrySeconds}s" );
-			}
-			finally
-			{
-				_socket = null;
+				if ( await TryLinkAsync( url, ct ) )
+					break;
 			}
 
 			if ( Current != this || ct.IsCancellationRequested )
 				break;
 
 			await GameTask.DelayRealtimeSeconds( RetrySeconds );
+		}
+	}
+
+	/// <summary>
+	/// Attempt one URL. Returns true if we connected - in which case this doesn't
+	/// return until the link drops - or false to let the caller try the next port.
+	/// </summary>
+	private async Task<bool> TryLinkAsync( string url, CancellationToken ct )
+	{
+		try
+		{
+			using var socket = new WebSocket();
+
+			socket.OnMessageReceived += OnMessage;
+			socket.OnDisconnected += ( status, reason ) => Log.Info( $"[bridge] disconnected: {status} {reason}" );
+
+			await socket.Connect( url, ct );
+
+			_socket = socket;
+			_lastGood = url;
+			Log.Info( $"[bridge] connected to {url}" );
+
+			await SendHelloAsync();
+
+			// hold the socket open; OnMessage does the real work
+			while ( Current == this && socket.IsConnected && !ct.IsCancellationRequested )
+			{
+				await GameTask.DelayRealtimeSeconds( 0.25f );
+			}
+
+			return true;
+		}
+		catch ( Exception e ) when ( !ct.IsCancellationRequested )
+		{
+			// nothing listening here, or it isn't a WebSocket - try the next port
+			Log.Info( $"[bridge] {url} unavailable ({e.GetType().Name})" );
+			return false;
+		}
+		finally
+		{
+			_socket = null;
 		}
 	}
 
