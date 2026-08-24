@@ -71,6 +71,26 @@ public sealed partial class GameManager
 	}
 
 	/// <summary>
+	/// Print this session's join code, to share with someone who wants to join.
+	/// </summary>
+	[ConCmd( "sessioninfo", Help = "Print this session's join code, to share with someone who wants to join." )]
+	public static void SessionInfoCommand()
+	{
+		if ( !Networking.IsActive )
+		{
+			Log.Warning( "Not in a session - nothing to share." );
+			return;
+		}
+
+		var host = Connection.Host?.SteamId;
+
+		Log.Info( $"Server   : {Networking.ServerName} ({Connection.All.Count()}/{Networking.MaxPlayers})" );
+		Log.Info( $"You are  : {(Networking.IsHost ? "the host" : "a client")}" );
+		Log.Info( $"Join code: {host}" );
+		Log.Info( $"Others join with:  join {host}" );
+	}
+
+	/// <summary>
 	/// Leave the current session.
 	/// </summary>
 	[ConCmd( "leave", Help = "Leave the current session." )]
@@ -84,5 +104,31 @@ public sealed partial class GameManager
 
 		Networking.Disconnect();
 		Log.Info( "Left the session." );
+	}
+
+	/// <summary>
+	/// TEMPORARY: probe which members LobbyInformation actually exposes.
+	/// </summary>
+	[ConCmd( "lobbydump", Help = "Debug: dump all visible lobbies." )]
+	public static async void LobbyDumpCommand()
+	{
+		var lobbies = await Networking.QueryLobbies( default );
+		Log.Info( $"QueryLobbies returned {lobbies?.Count ?? 0} lobbies" );
+		if ( lobbies is null ) return;
+
+		foreach ( var lobby in lobbies )
+		{
+			Log.Info( "--- lobby ---" );
+			Log.Info( "Ping = " + lobby.Ping );
+			Log.Info( "IsFull = " + lobby.IsFull );
+			Log.Info( "IsHidden = " + lobby.IsHidden );
+			Log.Info( "LobbyId = " + lobby.LobbyId );
+			Log.Info( "Name = " + lobby.Name );
+			Log.Info( "OwnerId = " + lobby.OwnerId );
+			Log.Info( "Members = " + lobby.Members );
+			Log.Info( "MaxMembers = " + lobby.MaxMembers );
+			Log.Info( "Map = " + lobby.Map );
+			Log.Info( "Data = " + lobby.Data );
+		}
 	}
 }
