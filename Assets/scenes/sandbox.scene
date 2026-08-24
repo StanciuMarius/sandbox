@@ -55,7 +55,26 @@
       "AgentStepSize": 18,
       "AgentMaxSlope": 40,
       "ExcludedBodies": "",
-      "IncludedBodies": ""
+      "IncludedBodies": "",
+      "DeferGeneration": false,
+      "CustomBounds": false,
+      "BakedDataPath": {
+        "$reference_type": "filereference",
+        "path": "scenes/sandbox_scene_data/navmesh/baked.navdata"
+      }
+    },
+    "GameObjectSystems": {
+      "Sandbox.Clutter.ClutterGridSystem": {
+        "Storage": {
+          "$blob": "64db792e-5935-8fbc-8cfa-050cd49fa7fd",
+          "$refs": []
+        }
+      },
+      "Sandbox.SelectionSetsSystem": {
+        "Data": {
+          "SelectionSets": []
+        }
+      }
     }
   },
   "ResourceVersion": 3,
