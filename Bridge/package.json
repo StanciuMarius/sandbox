@@ -1,0 +1,21 @@
+{
+  "name": "@marsz/sandbox-bridge",
+  "version": "0.1.0",
+  "description": "MCP bridge for the s&box Sandbox agent verb surface. Lets a coding agent drive a live Sandbox session.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "sandbox-bridge": "index.js"
+  },
+  "files": [
+    "index.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  }
+}
