@@ -7,11 +7,12 @@ using System.Threading;
 using System.Threading.Tasks;
 
 /// <summary>
-/// Outbound WebSocket link to an agent bridge running on this machine.
+/// Outbound WebSocket link to whatever an agent is running on this machine.
 ///
-/// The game always dials out - nothing listens inside the game process - so this
-/// works from a published client behind NAT with no ports opened. The bridge on
-/// the other end is what speaks MCP to an agent.
+/// The game always dials out - s&box gives game code a WebSocket client and no
+/// listener - so the other end has to be listening when we look. Normally that
+/// is a single invocation of Assets/agent/sbx.ps1, which binds a port, takes one
+/// call and exits, which is why we rescan every second.
 ///
 /// Deliberately NOT a console pipe. The agent can only call the verbs declared in
 /// <see cref="AgentVerbs"/>, each of which routes through the game's own commands
@@ -91,6 +92,12 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 		if ( !Enabled )
 			return;
 
+		StartLoop();
+	}
+
+	private void StartLoop()
+	{
+		_cts?.Cancel();
 		_cts = new CancellationTokenSource();
 		_ = MaintainAsync( _cts.Token );
 	}
@@ -110,9 +117,7 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 			return;
 		}
 
-		Current._cts?.Cancel();
-		Current._cts = new CancellationTokenSource();
-		_ = Current.MaintainAsync( Current._cts.Token );
+		Current.StartLoop();
 	}
 
 	[ConCmd( "bridge_disconnect", Help = "Drop the agent bridge connection." )]
@@ -144,6 +149,7 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 
 		while ( Current == this && !ct.IsCancellationRequested )
 		{
+
 			foreach ( var url in Candidates )
 			{
 				if ( Current != this || ct.IsCancellationRequested )
