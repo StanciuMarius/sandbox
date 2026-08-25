@@ -78,8 +78,15 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 	/// </summary>
 	private bool _reportedOffline;
 
+	/// <summary>Set by bridge_disconnect, cleared by bridge_connect. Separate from the saved convar.</summary>
+	private bool _suspended;
+
+	/// <summary>True while a connect attempt is in flight, so the tick doesn't start a second one.</summary>
+	private bool _connecting;
+
+	private RealTimeSince _sinceAttempt;
+
 	private WebSocket _socket;
-	private CancellationTokenSource _cts;
 
 	public static bool IsLinked => Current?._socket?.IsConnected ?? false;
 
@@ -89,17 +96,34 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 		// show the player what to run
 		AgentCli.Install();
 
-		if ( !Enabled )
-			return;
-
-		StartLoop();
+		Listen( Stage.StartUpdate, 0, Tick, "AgentBridge" );
 	}
 
-	private void StartLoop()
+	/// <summary>
+	/// Keep a link up, one frame at a time.
+	/// </summary>
+	/// <remarks>
+	/// Deliberately a frame listener rather than the <c>while (true) { await }</c> loop this used
+	/// to be. Hotload discards async state machines but leaves plain delegates alone, so every code
+	/// edit silently killed the old loop and the bridge stayed dead until someone ran
+	/// bridge_connect by hand. A tick comes back on its own.
+	///
+	/// The connect attempt is still async, but it is short-lived: if a hotload lands mid-attempt
+	/// the next tick simply starts another.
+	/// </remarks>
+	private void Tick()
 	{
-		_cts?.Cancel();
-		_cts = new CancellationTokenSource();
-		_ = MaintainAsync( _cts.Token );
+		if ( !Enabled || _suspended )
+			return;
+
+		if ( _socket is { IsConnected: true } )
+			return;
+
+		if ( _connecting || _sinceAttempt < RetrySeconds )
+			return;
+
+		_sinceAttempt = 0;
+		_ = ConnectAsync();
 	}
 
 	[ConCmd( "bridge_connect", Help = "Connect to the local agent bridge now." )]
@@ -117,13 +141,20 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 			return;
 		}
 
-		Current.StartLoop();
+		// The tick reconnects on its own now, so this only lifts a manual disconnect and skips
+		// the wait until the next retry.
+		Current._suspended = false;
+		Current._sinceAttempt = RetrySeconds;
 	}
 
 	[ConCmd( "bridge_disconnect", Help = "Drop the agent bridge connection." )]
 	public static void DisconnectCommand()
 	{
-		Current?._cts?.Cancel();
+		if ( Current is null ) return;
+
+		Current._suspended = true;
+		Current.Drop();
+
 		Log.Info( "[bridge] disconnecting" );
 	}
 
@@ -138,65 +169,65 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 	}
 
 	/// <summary>
-	/// Connect, pump, and reconnect until the scene goes away or we're cancelled.
+	/// One pass over the candidate ports, stopping at the first that answers.
 	/// </summary>
-	private async Task MaintainAsync( CancellationToken ct )
+	private async Task ConnectAsync()
 	{
-		// Current is assigned after our constructor returns, so yield once before
-		// the loop - otherwise the first "are we still the live system" check
-		// fails against a null Current and we exit before ever connecting.
-		await GameTask.DelayRealtimeSeconds( 0.5f );
+		_connecting = true;
 
-		while ( Current == this && !ct.IsCancellationRequested )
+		try
 		{
-
 			foreach ( var url in Candidates )
 			{
-				if ( Current != this || ct.IsCancellationRequested )
+				if ( Current != this || _suspended )
 					return;
 
-				if ( await TryLinkAsync( url, ct ) )
-					break;
+				if ( await TryLinkAsync( url ) )
+					return;
 			}
-
-			if ( Current != this || ct.IsCancellationRequested )
-				break;
-
-			await GameTask.DelayRealtimeSeconds( RetrySeconds );
+		}
+		finally
+		{
+			_connecting = false;
 		}
 	}
 
 	/// <summary>
-	/// Attempt one URL. Returns true if we connected - in which case this doesn't
-	/// return until the link drops - or false to let the caller try the next port.
+	/// Attempt one URL. Returns true once connected, without waiting for the link to drop.
 	/// </summary>
-	private async Task<bool> TryLinkAsync( string url, CancellationToken ct )
+	/// <remarks>
+	/// Nothing holds the socket open, and it is deliberately not in a <c>using</c>. Messages arrive
+	/// through <see cref="WebSocket.OnMessageReceived"/>, which is an event rather than something
+	/// being awaited, so a live connection keeps serving calls with no task babysitting it - and
+	/// survives a hotload that would have killed any loop doing the babysitting.
+	/// </remarks>
+	private async Task<bool> TryLinkAsync( string url )
 	{
+		var socket = new WebSocket();
+
+		socket.OnMessageReceived += OnMessage;
+
 		try
 		{
-			using var socket = new WebSocket();
+			await socket.Connect( url, CancellationToken.None );
 
-			socket.OnMessageReceived += OnMessage;
-			socket.OnDisconnected += ( status, reason ) => Log.Info( $"[bridge] disconnected: {status} {reason}" );
-
-			await socket.Connect( url, ct );
+			// Subscribed only once we're actually up, for two reasons: disposing a socket raises
+			// this as well, so a port scan would otherwise log a disconnection for every port it
+			// failed to reach; and a method group survives a hotload, where the lambda this
+			// replaced could not be remapped and left the handler dangling in engine state.
+			socket.OnDisconnected += OnSocketDisconnected;
 
 			_socket = socket;
 			_lastGood = url;
 			_reportedOffline = false;
+
 			Log.Info( $"[bridge] connected to {url}" );
 
 			await SendHelloAsync();
 
-			// hold the socket open; OnMessage does the real work
-			while ( Current == this && socket.IsConnected && !ct.IsCancellationRequested )
-			{
-				await GameTask.DelayRealtimeSeconds( 0.25f );
-			}
-
 			return true;
 		}
-		catch ( Exception ) when ( !ct.IsCancellationRequested )
+		catch ( Exception )
 		{
 			// Nothing listening here, or it isn't a WebSocket - try the next port.
 			// Say so once and then stay quiet; with a one-shot CLI this is the
@@ -207,12 +238,26 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 				Log.Info( $"[bridge] nothing listening on {url} - waiting for an agent" );
 			}
 
+			socket.Dispose();
+
 			return false;
 		}
-		finally
-		{
-			_socket = null;
-		}
+	}
+
+	private void OnSocketDisconnected( int status, string reason )
+	{
+		Log.Info( $"[bridge] disconnected: {status} {reason}" );
+
+		_socket = null;
+	}
+
+	/// <summary>Close the current link, if there is one.</summary>
+	private void Drop()
+	{
+		var socket = _socket;
+		_socket = null;
+
+		socket?.Dispose();
 	}
 
 	/// <summary>
