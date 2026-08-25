@@ -20,7 +20,7 @@ public sealed class PlayerFlashlight : Component
 	{
 		if ( !_player.IsValid() ) return;
 
-		if ( !IsProxy && Input.Pressed( "Flashlight" ) )
+		if ( _player.IsLocalPlayer && Input.Pressed( "Flashlight" ) )
 		{
 			Toggle();
 		}

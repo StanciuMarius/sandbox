@@ -25,6 +25,31 @@ public sealed partial class Player : Component, Component.IDamageable, PlayerCon
 	[Sync( SyncFlags.FromHost )] 
 	public PlayerData PlayerData { get; internal set; }
 
+	/// <summary>
+	/// True if an agent drives this pawn rather than a person at a keyboard.
+	/// </summary>
+	/// <remarks>
+	/// An agent pawn is owned by the connection of the player it belongs to - that is what keeps
+	/// undo, prop limits and prop protection working without inventing a second identity - so
+	/// ownership alone cannot tell the two apart. Everything meaning "the human here" asks
+	/// <see cref="IsLocalPlayer"/>, which accounts for this.
+	/// </remarks>
+	[Sync( SyncFlags.FromHost )]
+	public bool IsAgent { get; internal set; }
+
+	/// <summary>
+	/// What to call this pawn on nameplates and in messages.
+	/// </summary>
+	[Sync( SyncFlags.FromHost )]
+	public string AgentName { get; internal set; }
+
+	/// <summary>
+	/// The name to show for this pawn - the agent's own, or the owning person's.
+	/// </summary>
+	public string DisplayName => IsAgent
+		? (string.IsNullOrWhiteSpace( AgentName ) ? "Agent" : AgentName)
+		: Network.Owner?.DisplayName;
+
 	public Transform EyeTransform
 	{
 		get
@@ -38,7 +63,20 @@ public sealed partial class Player : Component, Component.IDamageable, PlayerCon
 		}
 	}
 
-	public bool IsLocalPlayer => !IsProxy;
+	/// <summary>
+	/// True if this pawn is the person sitting at this machine - the one whose input should drive
+	/// it, whose camera it owns, and whose HUD it draws.
+	/// </summary>
+	/// <remarks>
+	/// Deliberately not just <c>!IsProxy</c>. An agent pawn is owned by the same connection as the
+	/// player it belongs to, so it is not a proxy on their client either - without the
+	/// <see cref="IsAgent"/> half it would answer to their keys, fight them for the camera and
+	/// overwrite <c>LocalPlayer</c>.
+	///
+	/// This asks a different question from the bare <c>IsProxy</c> checks inside the tools, which
+	/// mean "do I have authority to change this" - those must stay as they are.
+	/// </remarks>
+	public bool IsLocalPlayer => !IsProxy && !IsAgent;
 
 	string IKillSource.DisplayName => Network.Owner?.DisplayName ?? "Unknown";
 	long IKillSource.SteamId => (long)(Network.Owner?.SteamId ?? default);
@@ -328,6 +366,10 @@ public sealed partial class Player : Component, Component.IDamageable, PlayerCon
 
 	void PlayerController.IEvents.PreInput()
 	{
+		// An agent pawn shares its owner's connection, so this fires for it too - and OnControl
+		// reads the keyboard directly and turns input controls back on every frame.
+		if ( !IsLocalPlayer ) return;
+
 		OnControl();
 	}
 
@@ -375,13 +417,18 @@ public sealed partial class Player : Component, Component.IDamageable, PlayerCon
 		Scene.Get<Inventory>()?.HandleInput();
 	}
 
-	void ToggleNoclip()
+	void ToggleNoclip() => SetNoclip( !IsNoclipping );
+
+	/// <summary>
+	/// Turn noclip on or off. Gravity and collision go with it.
+	/// </summary>
+	public void SetNoclip( bool on )
 	{
-		if ( GetComponent<NoclipMoveMode>( true ) is { } noclip )
-		{
-			noclip.Enabled = !noclip.Enabled;
-			IsNoclipping = noclip.Enabled;
-		}
+		if ( GetComponent<NoclipMoveMode>( true ) is not { } noclip )
+			return;
+
+		noclip.Enabled = on;
+		IsNoclipping = on;
 	}
 
 	private SoundHandle _dmgSound;

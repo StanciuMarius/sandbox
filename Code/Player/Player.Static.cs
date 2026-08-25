@@ -28,7 +28,7 @@ public sealed partial class Player : Component, Component.IDamageable, PlayerCon
 	/// </summary>
 	public static Player FindForConnection( Connection c )
 	{
-		return Game.ActiveScene.GetAll<Player>().FirstOrDefault( x => x.Network.Owner == c );
+		return Game.ActiveScene.GetAll<Player>().FirstOrDefault( x => x.Network.Owner == c && !x.IsAgent );
 	}
 
 	/// <summary>
@@ -36,6 +36,6 @@ public sealed partial class Player : Component, Component.IDamageable, PlayerCon
 	/// </summary>
 	public static Player For( Guid playerId )
 	{
-		return Game.ActiveScene.GetAll<Player>().FirstOrDefault( x => x.Network.Owner?.Id == playerId );
+		return Game.ActiveScene.GetAll<Player>().FirstOrDefault( x => x.Network.Owner?.Id == playerId && !x.IsAgent );
 	}
 }

@@ -72,18 +72,21 @@ internal static class AgentTools
 			.Select( g => (Name: g.OrderBy( x => x.Key.Length ).First().Key.ToLowerInvariant(), Type: g.First().Value) )
 			.OrderBy( x => x.Name );
 
-	/// <summary>The local player's toolgun, whether or not they're holding it.</summary>
+	/// <summary>
+	/// The agent's own toolgun, on its own pawn - summoning the companion if this is the first verb
+	/// of the session.
+	/// </summary>
+	/// <remarks>
+	/// Deliberately not the player's toolgun. Going through a separate pawn is what stops a verb
+	/// switching the tool out of the person's hands or overwriting settings they had dialled in.
+	/// </remarks>
 	public static Toolgun Toolgun
 	{
 		get
 		{
-			var player = Player.FindLocalPlayer();
-			if ( !player.IsValid() )
-				throw new InvalidOperationException( "No local player - is the game in a session rather than the main menu?" );
-
-			var toolgun = player.GetComponentInChildren<Toolgun>( true );
+			var toolgun = AgentPawn.ForLocalPlayer().Toolgun;
 			if ( !toolgun.IsValid() )
-				throw new InvalidOperationException( "The player has no toolgun" );
+				throw new InvalidOperationException( "The agent's companion has no toolgun yet - it may still be spawning in." );
 
 			return toolgun;
 		}

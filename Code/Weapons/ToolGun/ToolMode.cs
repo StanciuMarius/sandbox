@@ -148,6 +148,12 @@ public abstract partial class ToolMode : Component, IToolInfo
 
 		if ( action is null ) return false;
 
+		// An agent drives its own pawn, so walk it round to the work first - that way the beam
+		// comes out of the companion's toolgun instead of from nowhere, and the person can see
+		// where it is working.
+		if ( Player is { IsAgent: true } player )
+			player.GetComponent<AgentPawn>()?.PoseAt( aim.WorldPosition() );
+
 		if ( !FireToolAction( input ) )
 			return false;
 
@@ -250,6 +256,11 @@ public abstract partial class ToolMode : Component, IToolInfo
 	/// </summary>
 	private void DispatchActions()
 	{
+		// Only a person's own clicks drive a tool this way. An agent pawn is owned by that person's
+		// connection as well, so without this its toolgun would fire every time they pressed the
+		// button - at whatever the companion happened to be facing.
+		if ( Player is not { IsLocalPlayer: true } ) return;
+
 		foreach ( var action in _actions )
 		{
 			var inputName = action.InputAction;
@@ -271,9 +282,26 @@ public abstract partial class ToolMode : Component, IToolInfo
 		}
 	}
 
+	/// <summary>
+	/// Whether this tool's settings should be remembered between uses.
+	/// </summary>
+	/// <remarks>
+	/// True for a person: picking a tool back up should give them the slack and rigidity they last
+	/// dialled in. False for an agent, for two reasons.
+	///
+	/// First, cookies are keyed on the tool type alone - <c>tool.stackertool.stackcount</c> - so an
+	/// agent's toolgun and its owner's share one store. Saving on the way out means the agent
+	/// silently overwrites the person's saved settings every time it switches tool.
+	///
+	/// Second, a verb has to be reproducible. Loading a value from the last session on activate
+	/// means the same call does different things on different days, which is no basis for anything
+	/// an agent scripts. Verbs write every setting they care about on every call instead.
+	/// </remarks>
+	private bool RemembersSettings => Network.IsOwner && Player is not { IsAgent: true };
+
 	protected override void OnEnabled()
 	{
-		if ( Network.IsOwner )
+		if ( RemembersSettings )
 		{
 			this.LoadCookies();
 		}
@@ -283,7 +311,7 @@ public abstract partial class ToolMode : Component, IToolInfo
 	{
 		DisableSnapGrid();
 
-		if ( Network.IsOwner )
+		if ( RemembersSettings )
 		{
 			this.SaveCookies();
 		}

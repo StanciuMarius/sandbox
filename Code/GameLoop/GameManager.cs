@@ -74,7 +74,7 @@ public sealed partial class GameManager : GameObjectSystem<GameManager>, Compone
 		Assert.True( Networking.IsHost, $"Client tried to SpawnPlayer: {playerData.Network.Owner?.DisplayName}" );
 
 		// does this connection already have a player?
-		if ( Scene.GetAll<Player>().Any( x => x.Network.Owner == playerData.Network.Owner ) )
+		if ( Scene.GetAll<Player>().Any( x => x.Network.Owner == playerData.Network.Owner && !x.IsAgent ) )
 			return;
 
 		// Find a spawn location for this player

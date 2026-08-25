@@ -35,12 +35,22 @@ public sealed class NoclipMoveMode : Sandbox.Movement.MoveMode
 		body.Tags.Set( "noclip", !EnableCollision );
 	}
 
+	/// <summary>
+	/// Whether the person at this keyboard is the one flying this body.
+	/// </summary>
+	/// <remarks>
+	/// Not <c>!IsProxy</c>. An agent pawn is owned by its person's connection, so it isn't a proxy
+	/// on their client - and the direct <see cref="Input"/> reads below go around the controller's
+	/// <c>UseInputControls</c> switch, which is the usual way of telling a pawn not to listen.
+	/// </remarks>
+	private bool IsPlayerDriven => GetComponentInParent<Player>() is { IsLocalPlayer: true };
+
 	public override void OnModeBegin()
 	{
 		Controller.IsClimbing = true;
 		Controller.Body.Gravity = false;
 
-		if ( !IsProxy )
+		if ( IsPlayerDriven )
 			Sandbox.Services.Stats.Increment( "move.noclip.use", 1 );
 	}
 
@@ -64,6 +74,12 @@ public sealed class NoclipMoveMode : Sandbox.Movement.MoveMode
 
 	public override Vector3 UpdateMove( Rotation eyes, Vector3 input )
 	{
+		// A noclipping agent pawn stays exactly where it was put - it's moved by the bridge, not
+		// flown. Without this the jump and duck reads below would drift it up and down whenever
+		// its owner pressed those keys.
+		if ( !IsPlayerDriven )
+			return Vector3.Zero;
+
 		// don't normalize, because analog input might want to go slow
 		input = input.ClampLength( 1 );
 
