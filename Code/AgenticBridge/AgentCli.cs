@@ -1,74 +1,96 @@
 using System;
-using System.Threading.Tasks;
 
 /// <summary>
-/// Puts the agent CLI somewhere an agent can actually run it.
+/// Puts the agent CLI, and instructions for using it, somewhere an agent can
+/// actually reach.
 ///
-/// The script ships inside the package, but package content lives in s&box's
-/// virtual filesystem - there is no stable path on disk to hand anyone. So we
-/// copy it into this package's data folder, which is a real directory, and give
-/// out that path instead.
+/// Both ship inside the package, but package content lives in s&box's virtual
+/// filesystem - there is no stable path on disk to hand anyone. So we copy them
+/// into this package's data folder, which is a real directory, and give out that
+/// path instead.
 ///
-/// The upshot is that a player installs nothing. Windows already has PowerShell,
-/// the game already has the script, and the Q menu hands them the one line that
-/// joins the two.
+/// The player hands their agent one line pointing at the README. The agent reads
+/// it, learns the command and the conventions, and gets on with it - so the
+/// player never has to explain the game.
 /// </summary>
 internal static class AgentCli
 {
-	/// <summary>Where the script lives inside the package.</summary>
-	private const string SourcePath = "agent/sbx.ps1";
+	private const string ScriptSource = "agent/sbx.ps1";
+	private const string ReadmeSource = "agent/README.md";
 
-	/// <summary>Where we copy it to, relative to this package's data folder.</summary>
-	private const string InstalledPath = "agent/sbx.ps1";
+	private const string ScriptInstalled = "agent/sbx.ps1";
+	private const string ReadmeInstalled = "agent/README.md";
+
+	/// <summary>Replaced in the README with the real invocation for this machine.</summary>
+	private const string CommandToken = "{{SBX}}";
 
 	/// <summary>Full path to the extracted script, or null if it isn't there.</summary>
 	public static string ScriptPath { get; private set; }
 
-	/// <summary>
-	/// The line a player pastes to let an agent drive their session.
-	/// -ExecutionPolicy Bypass because the default policy blocks unsigned scripts,
-	/// and asking players to change a machine-wide security setting is worse.
-	/// </summary>
-	public static string Command =>
-		ScriptPath is null
-			? "(the agent CLI could not be unpacked - see the console)"
-			: $"powershell -ExecutionPolicy Bypass -File \"{ScriptPath}\"";
+	/// <summary>Full path to the extracted instructions, or null if they aren't there.</summary>
+	public static string ReadmePath { get; private set; }
 
 	/// <summary>
-	/// Copy the script out of the package. Cheap, and rewriting every launch means
-	/// a game update can't leave a stale script behind.
+	/// How to invoke the CLI on this machine. -ExecutionPolicy Bypass because the
+	/// default policy blocks unsigned scripts, and asking players to change a
+	/// machine-wide security setting would be a worse answer.
+	/// </summary>
+	public static string ScriptCommand =>
+		ScriptPath is null ? null : $"powershell -ExecutionPolicy Bypass -File \"{ScriptPath}\"";
+
+	/// <summary>
+	/// What the player pastes to their agent. A sentence rather than a command,
+	/// because the useful thing is for the agent to go and read the instructions.
+	/// </summary>
+	public static string Prompt =>
+		ReadmePath is null
+			? "(the agent files could not be unpacked - see the console)"
+			: $"Read \"{ReadmePath}\" and use it to control my Sandbox game session.";
+
+	/// <summary>
+	/// Copy both files out of the package, rewriting the README so its examples
+	/// carry the real path. Cheap, and doing it every launch means a game update
+	/// can't leave a stale copy behind.
 	/// </summary>
 	public static void Install()
 	{
+		ScriptPath = null;
+		ReadmePath = null;
+
 		try
 		{
-			if ( !FileSystem.Mounted.FileExists( SourcePath ) )
+			if ( !FileSystem.Mounted.FileExists( ScriptSource ) || !FileSystem.Mounted.FileExists( ReadmeSource ) )
 			{
-				Log.Warning( $"[bridge] {SourcePath} is missing from the package - is it in the sbproj Resources list?" );
+				Log.Warning( $"[bridge] {ScriptSource} or {ReadmeSource} is missing from the package - are they in the sbproj Resources list?" );
 				return;
 			}
 
-			var contents = FileSystem.Mounted.ReadAllText( SourcePath );
-
 			FileSystem.Data.CreateDirectory( "agent" );
-			FileSystem.Data.WriteAllText( InstalledPath, contents );
 
-			ScriptPath = FileSystem.Data.GetFullPath( InstalledPath );
+			FileSystem.Data.WriteAllText( ScriptInstalled, FileSystem.Mounted.ReadAllText( ScriptSource ) );
+			ScriptPath = FileSystem.Data.GetFullPath( ScriptInstalled );
 
-			Log.Info( $"[bridge] agent CLI ready at {ScriptPath}" );
+			// the README is templated, so it can only be written once we know where
+			// the script landed
+			var readme = FileSystem.Mounted.ReadAllText( ReadmeSource ).Replace( CommandToken, ScriptCommand );
+
+			FileSystem.Data.WriteAllText( ReadmeInstalled, readme );
+			ReadmePath = FileSystem.Data.GetFullPath( ReadmeInstalled );
+
+			Log.Info( $"[bridge] agent instructions ready at {ReadmePath}" );
 		}
 		catch ( Exception e )
 		{
-			Log.Warning( $"[bridge] couldn't unpack the agent CLI: {e.Message}" );
+			Log.Warning( $"[bridge] couldn't unpack the agent files: {e.Message}" );
 		}
 	}
 
-	[ConCmd( "bridge_cli", Help = "Print the command that lets an agent drive this session." )]
-	public static void PrintCommand()
+	[ConCmd( "bridge_cli", Help = "Print what to give an agent so it can drive this session." )]
+	public static void PrintPrompt()
 	{
-		if ( ScriptPath is null )
+		if ( ReadmePath is null )
 			Install();
 
-		Log.Info( $"[bridge] {Command}" );
+		Log.Info( $"[bridge] {Prompt}" );
 	}
 }

@@ -28,7 +28,7 @@
     </div>
 
     <div class="control-row">
-        <label class="left" style="font-size: 12px; opacity: 0.6;">@AgentCli.Command</label>
+        <label class="left" style="font-size: 12px; opacity: 0.6;">@AgentCli.ReadmePath</label>
     </div>
 
 </root>
@@ -54,7 +54,7 @@
     void ToggleEnabled()
     {
         // a local preference, not a server setting - each player decides whether
-        // their own client talks to a bridge
+        // their own client talks to an agent
         ConsoleSystem.Run( "sb.bridge", !AgentBridge.Enabled );
 
         if ( AgentBridge.Enabled )
@@ -65,10 +65,12 @@
 
     void CopyCommand()
     {
-        Clipboard.SetText( AgentCli.Command );
+        // the prompt points the agent at the README rather than handing over a
+        // bare command, so the player never has to explain the game themselves
+        Clipboard.SetText( AgentCli.Prompt );
         timeSinceCopied = 0f;
         StateHasChanged();
     }
 
-    protected override int BuildHash() => HashCode.Combine( AgentBridge.Enabled, AgentBridge.IsLinked, JustCopied, AgentCli.ScriptPath );
+    protected override int BuildHash() => HashCode.Combine( AgentBridge.Enabled, AgentBridge.IsLinked, JustCopied, AgentCli.ReadmePath );
 }
