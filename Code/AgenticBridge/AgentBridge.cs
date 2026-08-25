@@ -64,7 +64,18 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 		}
 	}
 
-	private const float RetrySeconds = 5f;
+	/// <summary>
+	/// How long to wait before scanning the ports again. This is also the latency
+	/// floor for a one-shot CLI: it binds a port and waits for us to notice, so a
+	/// caller waits half this on average.
+	/// </summary>
+	private const float RetrySeconds = 1f;
+
+	/// <summary>
+	/// Whether we've already reported that nothing is listening. Retrying every
+	/// second forever would otherwise bury the console in identical lines.
+	/// </summary>
+	private bool _reportedOffline;
 
 	private WebSocket _socket;
 	private CancellationTokenSource _cts;
@@ -162,6 +173,7 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 
 			_socket = socket;
 			_lastGood = url;
+			_reportedOffline = false;
 			Log.Info( $"[bridge] connected to {url}" );
 
 			await SendHelloAsync();
@@ -174,10 +186,17 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 
 			return true;
 		}
-		catch ( Exception e ) when ( !ct.IsCancellationRequested )
+		catch ( Exception ) when ( !ct.IsCancellationRequested )
 		{
-			// nothing listening here, or it isn't a WebSocket - try the next port
-			Log.Info( $"[bridge] {url} unavailable ({e.GetType().Name})" );
+			// Nothing listening here, or it isn't a WebSocket - try the next port.
+			// Say so once and then stay quiet; with a one-shot CLI this is the
+			// normal state and we're re-scanning every second.
+			if ( !_reportedOffline )
+			{
+				_reportedOffline = true;
+				Log.Info( $"[bridge] nothing listening on {url} - waiting for an agent" );
+			}
+
 			return false;
 		}
 		finally
