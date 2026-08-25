@@ -34,6 +34,12 @@ internal static class AgentVerbs
 		/// <summary>Settings this verb exposes on the tool it drives. Folded into <see cref="Args"/>.</summary>
 		public ToolParam[] Params { get; init; } = [];
 
+		/// <summary>
+		/// For a verb that takes a 'kind', the kinds it accepts - their settings are folded into
+		/// <see cref="Args"/> too, each labelled with the kinds it applies to.
+		/// </summary>
+		public string[] Kinds { get; init; } = [];
+
 		public Func<JsonObject, Task<JsonNode>> Handler { get; init; }
 	}
 
@@ -73,7 +79,7 @@ internal static class AgentVerbs
 	private const string TargetHelp =
 		"What to act on. A marker label like 'A' (best - the player places these with the Marker tool), " +
 		"'aim' for wherever the player is currently looking, 'pointer' for the most recent marker, " +
-		"an object id from list_objects, or 'at:x,y,z'.";
+		"an object id from list_props, or 'at:x,y,z'.";
 
 	/// <summary>
 	/// Placement tools, and whether their secondary action is a second way of placing rather than a
@@ -157,6 +163,7 @@ internal static class AgentVerbs
 				["attach"] = "Default true. False places a thruster or emitter without welding it on, or a " +
 					"balloon without its rope. Not available for wheels or hoverballs."
 			},
+			Kinds = ["thruster", "wheel", "hoverball", "balloon", "emitter"],
 			Handler = PlaceEntity
 		} );
 
@@ -172,6 +179,7 @@ internal static class AgentVerbs
 				["a"] = "First point. " + TargetHelp,
 				["b"] = "Second point. " + TargetHelp
 			},
+			Kinds = ["weld", "rope", "elastic", "slider", "ballsocket", "nocollide", "hydraulic", "linker"],
 			Handler = Constrain
 		} );
 
@@ -184,6 +192,7 @@ internal static class AgentVerbs
 				["target"] = TargetHelp,
 				["to"] = "Optional second point to stay upright relative to. Without it, anchors to the world."
 			},
+			Params = UprightParams,
 			Handler = KeepUpright
 		} );
 
@@ -240,31 +249,18 @@ internal static class AgentVerbs
 		Add( new Verb
 		{
 			Name = "list_tools",
-			Description = "List every toolgun tool, with the settings each one exposes and their current values. " +
-				"Use this to discover what set_tool_option can change.",
+			Description = "List every toolgun tool with the actions it offers. Settings are arguments on the verb " +
+				"that drives each tool, not something set separately - the verb list is where to read them, and " +
+				"the values shown here are only whatever the last call happened to leave behind.",
 			Args = { ["tool"] = "Optional. Limit to one tool by name." },
 			Handler = ListTools
 		} );
 
 		Add( new Verb
 		{
-			Name = "set_tool_option",
-			Description = "Change one of a tool's settings - rope slack, weld rigidity, which thruster model to " +
-				"place, and so on. The setting sticks until changed, so set it before the verb that uses it.",
-			Args =
-			{
-				["tool"] = "Tool name, e.g. 'rope'. See list_tools.",
-				["option"] = "Setting name, e.g. 'Slack'. See list_tools.",
-				["value"] = "New value. Numbers, true/false, text or an enum name, matching the setting's type."
-			},
-			Handler = SetToolOption
-		} );
-
-		Add( new Verb
-		{
 			Name = "use_tool",
 			Description = "Run any tool's primary, secondary or reload action against a point. The escape hatch " +
-				"for tools with no dedicated verb - decal, trail, stacker, resizer - and for the secondary actions " +
+				"for tools with no dedicated verb - resizer, duplicator - and for the secondary actions " +
 				"of ones that do. Check list_tools for what each action does before using it. " +
 				"'created' lists new objects and is empty for tools that only modify what is already there, so an " +
 				"empty list is not a failure - the action succeeded if no error came back. Do not retry on it.",
@@ -407,7 +403,40 @@ internal static class AgentVerbs
 		foreach ( var param in verb.Params )
 			verb.Args[param.Name] = $"{param.Description} Optional, defaults to {Describe( param.Default )}.";
 
+		DescribeKindParams( verb );
+
 		_verbs[verb.Name] = verb;
+	}
+
+	/// <summary>
+	/// Fold the settings of every kind a verb accepts into its argument list, each labelled with
+	/// the kinds it applies to.
+	/// </summary>
+	/// <remarks>
+	/// A rope's slack and a weld's easy mode arrive through the same verb but belong to different
+	/// kinds, and passing one to the other is a mistake worth being able to see coming. Where
+	/// several kinds share an argument name and the same default it is stated once; where the
+	/// default varies - every kind has its own 'definition' - it says so instead.
+	/// </remarks>
+	private static void DescribeKindParams( Verb verb )
+	{
+		var byName = verb.Kinds
+			.SelectMany( kind => ParamsFor( kind ).Select( param => (kind, param) ) )
+			.GroupBy( x => x.param.Name );
+
+		foreach ( var group in byName )
+		{
+			var owners = string.Join( ", ", group.Select( x => x.kind ) );
+			var first = group.First().param;
+
+			var defaults = group.Select( x => Describe( x.param.Default ) ).Distinct().ToArray();
+
+			var fallback = defaults.Length == 1
+				? $"defaults to {defaults[0]}"
+				: "each kind has its own default";
+
+			verb.Args[first.Name] = $"({owners}) {first.Description} Optional, {fallback}.";
+		}
 	}
 
 	/// <summary>
@@ -591,7 +620,7 @@ internal static class AgentVerbs
 		if ( !attach && !hasAlternatePlacement )
 			throw new ArgumentException( $"A {kind} is always attached to what it's placed on - drop the 'attach' argument." );
 
-		var tool = AgentTools.Activate( kind );
+		var tool = Prepare( kind, ParamsFor( kind ), args );
 		var point = AgentTargets.Resolve( Str( args, "target" ), tool );
 
 		var input = attach ? ToolInput.Primary : ToolInput.Secondary;
@@ -622,7 +651,7 @@ internal static class AgentVerbs
 		if ( AgentTools.Get( kind ) is not BaseConstraintToolMode constraint )
 			throw new ArgumentException( $"'{kind}' isn't a constraint tool. One of: weld, rope, elastic, slider, ballsocket, nocollide, hydraulic, linker." );
 
-		var tool = AgentTools.Activate( kind );
+		var tool = Prepare( kind, ParamsFor( kind ), args );
 
 		var a = AgentTargets.Resolve( Str( args, "a" ), tool, "a" );
 		var b = AgentTargets.Resolve( Str( args, "b" ), tool, "b" );
@@ -649,7 +678,7 @@ internal static class AgentVerbs
 
 	private static Task<JsonNode> KeepUpright( JsonObject args )
 	{
-		var tool = AgentTools.Activate<KeepUprightTool>( "upright" );
+		var tool = (KeepUprightTool)Prepare( "upright", UprightParams, args );
 
 		var target = AgentTargets.Resolve( Str( args, "target" ), tool );
 
@@ -816,39 +845,6 @@ internal static class AgentVerbs
 		{
 			["count"] = tools.Count,
 			["tools"] = tools
-		} );
-	}
-
-	private static Task<JsonNode> SetToolOption( JsonObject args )
-	{
-		var toolName = Str( args, "tool" );
-		var optionName = Str( args, "option" );
-
-		if ( string.IsNullOrWhiteSpace( optionName ) )
-			throw new ArgumentException( "'option' is required. Call list_tools to see what a tool exposes." );
-
-		if ( !args.TryGetPropertyValue( "value", out var valueNode ) || valueNode is null )
-			throw new ArgumentException( "'value' is required" );
-
-		// don't switch the player's tool just to change a setting on it
-		var tool = AgentTools.Get( toolName );
-
-		var option = AgentTools.Options( tool )
-			.FirstOrDefault( x => string.Equals( x.Name, optionName, StringComparison.OrdinalIgnoreCase ) );
-
-		if ( option is null )
-		{
-			var known = string.Join( ", ", AgentTools.Options( tool ).Select( x => x.Name ) );
-			throw new ArgumentException( $"'{toolName}' has no setting '{optionName}'. It has: {(string.IsNullOrEmpty( known ) ? "none" : known)}" );
-		}
-
-		option.SetValue( tool, Coerce( valueNode, option ) );
-
-		return Task.FromResult<JsonNode>( new JsonObject
-		{
-			["tool"] = toolName,
-			["option"] = option.Name,
-			["value"] = Describe( SafeGet( option, tool ) )
 		} );
 	}
 
@@ -1053,6 +1049,102 @@ internal static class AgentVerbs
 	}
 
 	// ---- tools with settings, each driven by one verb ------------------
+
+	/// <summary>
+	/// Settings for the tools behind the verbs that take a 'kind', keyed by that kind.
+	/// </summary>
+	/// <remarks>
+	/// Kept per kind rather than per verb because a rope and a weld share a verb but not their
+	/// settings. A kind absent from here has nothing to tune.
+	/// </remarks>
+	private static readonly Dictionary<string, ToolParam[]> KindParams = new( StringComparer.OrdinalIgnoreCase )
+	{
+		["weld"] =
+		[
+			new() { Name = "easymode", Property = "EasyMode", Default = true,
+				Description = "Whether welding moves the first object so the two marked points touch. True is usually what you want when assembling something; false leaves both where they are." },
+			new() { Name = "rigid", Property = "Rigid", Default = false,
+				Description = "Whether the joint is completely rigid rather than slightly springy." }
+		],
+		["rope"] =
+		[
+			new() { Name = "slack", Property = "Slack", Default = 0f,
+				Description = "Extra length beyond the distance between the two points, in units. Zero pulls taut." },
+			new() { Name = "rigid", Property = "Rigid", Default = false,
+				Description = "Whether the rope resists being compressed as well as stretched." },
+			new() { Name = "radius", Property = "Radius", Default = 1f,
+				Description = "How thick the rope is drawn, in units." }
+		],
+		["elastic"] =
+		[
+			new() { Name = "frequency", Property = "Frequency", Default = 2f,
+				Description = "Springiness in hertz. Higher is stiffer and snappier." },
+			new() { Name = "damping", Property = "Damping", Default = 0.1f,
+				Description = "How quickly the bounce dies away, 0 to 1. Low values wobble for longer." },
+			new() { Name = "stretchonly", Property = "StretchOnly", Default = false,
+				Description = "Whether it only pulls, never pushes - a bungee rather than a spring." }
+		],
+		["hydraulic"] =
+		[
+			new() { Name = "balljoints", Property = "BallJoints", Default = false,
+				Description = "Whether the ends pivot freely instead of holding their angle." }
+		],
+		["ballsocket"] =
+		[
+			new() { Name = "collision", Property = "EnableCollision", Default = false,
+				Description = "Whether the two joined objects still collide with each other." }
+		],
+
+		["thruster"] =
+		[
+			new() { Name = "definition", Property = "Definition", Default = "entities/thruster/basic.tdef",
+				Description = "Which variant to place, as a resource path. Each kind has a basic one it uses by default." }
+		],
+		["wheel"] =
+		[
+			new() { Name = "definition", Property = "Definition", Default = "entities/wheel/basic.wdef",
+				Description = "Which variant to place, as a resource path. Each kind has a basic one it uses by default." }
+		],
+		["hoverball"] =
+		[
+			new() { Name = "definition", Property = "Definition", Default = "entities/hoverball/basic.hdef",
+				Description = "Which variant to place, as a resource path. Each kind has a basic one it uses by default." }
+		],
+		["balloon"] =
+		[
+			new() { Name = "definition", Property = "Definition", Default = "entities/balloon/basic.bdef",
+				Description = "Which variant to place, as a resource path. Each kind has a basic one it uses by default." },
+			new() { Name = "length", Property = "Length", Default = 50f,
+				Description = "Length of the rope tethering it, in units." },
+			new() { Name = "force", Property = "Force", Default = 1f,
+				Description = "How hard it pulls upward." },
+			new() { Name = "rigid", Property = "Rigid", Default = false,
+				Description = "Whether the tether is rigid rather than rope-like." },
+			new() { Name = "tint", Property = "Tint", Default = Color.White,
+				Description = "Balloon colour, as 'r,g,b' or 'r,g,b,a' from 0 to 1." }
+		],
+		["emitter"] =
+		[
+			new() { Name = "base", Property = "BaseDef", Default = "entities/emitter/basic.smemit",
+				Description = "The emitter body to place, as a resource path." },
+			new() { Name = "effect", Property = "EffectDef", Default = "entities/particles/sparks.semit",
+				Description = "The effect it gives off, as a resource path." }
+		]
+	};
+
+	/// <summary>Settings for a kind, or none if it has nothing to tune.</summary>
+	private static ToolParam[] ParamsFor( string kind ) =>
+		KindParams.TryGetValue( kind ?? "", out var found ) ? found : [];
+
+	private static readonly ToolParam[] UprightParams =
+	{
+		new() { Name = "hertz", Property = "Hertz", Default = 2f,
+			Description = "How stiffly it rights itself, in hertz. Higher snaps upright harder." },
+		new() { Name = "damping", Property = "DampingRatio", Default = 0.7f,
+			Description = "How much the righting motion is damped, 0 to 1. Low values overshoot and wobble." },
+		new() { Name = "torque", Property = "TorqueMultiplier", Default = 5000f,
+			Description = "Maximum turning force available. Heavy contraptions need more." }
+	};
 
 	/// <summary>Tool name to the verb that drives it, for tools whose settings are verb arguments.</summary>
 	private static readonly Dictionary<string, string> ParametricTools = new( StringComparer.OrdinalIgnoreCase )
@@ -1297,6 +1389,21 @@ internal static class AgentVerbs
 				return parsed;
 
 			throw new ArgumentException( $"'{raw}' isn't a valid {type.Name} for '{option.Name}'. Valid values: {string.Join( ", ", Enum.GetNames( type ) )}" );
+		}
+
+		// Before the Json fallback, which takes "1,0.2,0.2" and hands back a transparent black
+		// rather than failing - a wrong colour with no error is worse than a rejected one.
+		if ( type == typeof( Color ) )
+		{
+			if ( Color.Parse( raw ) is not { } color )
+				throw new ArgumentException( $"'{raw}' isn't a colour for '{option.Name}'. Expected 'r,g,b' or 'r,g,b,a', each 0 to 1." );
+
+			// Parse leaves alpha at zero when it isn't given, which would make the thing invisible.
+			// Someone writing "1,0.2,0.2" means opaque red.
+			if ( raw.Count( x => x == ',' ) < 3 )
+				color.a = 1f;
+
+			return color;
 		}
 
 		if ( type == typeof( bool ) )

@@ -120,34 +120,26 @@ calls, so the same command always builds the same thing:
 ```
 {{SBX}} stack --target A --count 12 --direction Right --gap 4
 {{SBX}} stack --target A                    # back to count 1, Up, flush
+{{SBX}} constrain --kind rope --a A --b B --slack 50 --radius 2
+{{SBX}} place_entity --kind balloon --target C --force 3 --tint "1,0.2,0.2"
 ```
 
 Run `{{SBX}}` with no verb to see every setting a verb takes and what it falls
-back to.
-
-`constrain` and `place_entity` have not been converted yet, so the tools behind
-them are still set separately with `set_tool_option` — and that *does* persist
-for the rest of the session, so set it before the verb that uses it:
-
-```
-{{SBX}} list_tools --tool rope
-{{SBX}} set_tool_option --tool rope --option Slack --value 50
-{{SBX}} constrain --kind rope --a A --b B
-```
+back to. On `constrain` and `place_entity` each setting is labelled with the
+kinds it applies to, since a rope's slack and a weld's easy mode share a verb
+but not each other.
 
 ## Things worth knowing
 
 - **Welding moves things.** The weld tool's Easy Mode is on by default, and it
   works the way it does for a player: welding A to B *moves A* so the two marked
   points touch. That is usually what you want when assembling something. If you
-  need both objects to stay put, turn it off first with
-  `set_tool_option --tool weld --option EasyMode --value false`.
+  need both objects to stay put, pass `--easymode false`.
 - **You have your own body.** The first verb that needs a tool summons a
   companion character carrying its own toolgun, and it walks itself round to
   whatever it is working on so the player can watch. Because that toolgun is its
-  own, switching tools and changing tool settings never disturbs what the player
-  is holding — `list_tools` and `set_tool_option` read and write *your* settings,
-  not theirs.
+  own, switching tools never disturbs what the player is holding, and no setting
+  you pass can change what their tools do.
 - **Positions are `"x,y,z"` strings**, not arrays. One unit is one inch, `+z` is
   up. This is Source engine convention.
 - **`spawn_prop` without `--at` places props where the player is looking.** With

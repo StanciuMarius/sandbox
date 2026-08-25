@@ -27,7 +27,7 @@ internal static class AgentTargets
 	public static ToolMode.SelectionPoint Resolve( string spec, ToolMode tool, string argName = "target" )
 	{
 		if ( string.IsNullOrWhiteSpace( spec ) )
-			throw new ArgumentException( $"'{argName}' is required. Give a marker label like 'A', or 'aim' - call list_markers or list_objects to see what's available." );
+			throw new ArgumentException( $"'{argName}' is required. Give a marker label like 'A', or 'aim' - call list_markers or list_props to see what's available." );
 
 		spec = spec.Trim();
 
@@ -163,7 +163,7 @@ internal static class AgentTargets
 		if ( matches.Count > 1 )
 			throw new ArgumentException( $"'{argName}': '{id}' matches more than one object. Use more of the id." );
 
-		throw new ArgumentException( $"'{argName}': no object with id '{id}'. Call list_objects to see what's there." );
+		throw new ArgumentException( $"'{argName}': no object with id '{id}'. Call list_props to see what's there." );
 	}
 
 	/// <summary>
