@@ -30,6 +30,15 @@ public sealed partial class GameManager
 		var player = Player.FindForConnection( Rpc.Caller );
 		if ( player is null ) return;
 
+		await SpawnAt( ident, AimTransform( player ), player, metadata, forceWorld );
+	}
+
+	/// <summary>
+	/// Where a spawn lands when the player doesn't say - on the first surface along their view,
+	/// turned to face them.
+	/// </summary>
+	public static Transform AimTransform( Player player )
+	{
 		var eyes = player.EyeTransform;
 
 		var trace = Game.SceneTrace.Ray( eyes.Position, eyes.Position + eyes.Forward * 2048 )
@@ -44,8 +53,21 @@ public sealed partial class GameManager
 		var forward = Vector3.Cross( right, up ).Normal;
 		var facingAngle = Rotation.LookAt( forward, up );
 
-		var spawnTransform = new Transform( trace.EndPosition, facingAngle );
+		return new Transform( trace.EndPosition, facingAngle );
+	}
 
+	/// <summary>
+	/// Spawn at an explicit transform and hand back what was created.
+	/// </summary>
+	/// <remarks>
+	/// Must run on the host. Split out of <see cref="Spawn"/> so a caller that knows where it wants
+	/// something - the agent bridge placing a prop on a marker - can say so, and can then go on to
+	/// weld or bolt to what it just made. The broadcast <see cref="Spawn"/> can't do either: it
+	/// always uses the player's aim, and being fire-and-forget it has nothing to return.
+	/// </remarks>
+	/// <returns>The spawned roots, or null if the ident didn't resolve or a limit refused it.</returns>
+	public static async Task<List<GameObject>> SpawnAt( string ident, Transform transform, Player player, string metadata = null, bool forceWorld = false )
+	{
 		// TODO - can this user spawn this package?
 
 		var (type, path, source) = SpawnlistItem.ParseIdent( ident );
@@ -53,15 +75,14 @@ public sealed partial class GameManager
 		var spawner = ISpawner.Create( type, path, source, metadata );
 
 		if ( spawner is not null && await spawner.Loading )
-		{
-			await SpawnAndUndo( spawner, spawnTransform, player, forceWorld );
-			return;
-		}
+			return await SpawnAndUndo( spawner, transform, player, forceWorld );
 
 		Log.Warning( $"Couldn't resolve '{ident}'" );
+
+		return null;
 	}
 
-	private static async Task SpawnAndUndo( ISpawner spawner, Transform transform, Player player, bool forceWorld = false )
+	private static async Task<List<GameObject>> SpawnAndUndo( ISpawner spawner, Transform transform, Player player, bool forceWorld = false )
 	{
 		var spawnData = new Global.ISpawnEvents.SpawnData
 		{
@@ -73,10 +94,10 @@ public sealed partial class GameManager
 		Game.ActiveScene.RunEvent<Global.ISpawnEvents>( x => x.OnSpawn( spawnData ) );
 
 		if ( spawnData.Cancelled )
-			return;
+			return null;
 
 		if ( !player.IsValid() )
-			return;
+			return null;
 
 		// If the prefab is a weapon, pick it up directly instead of spawning into the world
 		if ( !forceWorld )
@@ -86,7 +107,7 @@ public sealed partial class GameManager
 			{
 				var inventory = player.GetComponent<PlayerInventory>();
 				inventory.Pickup( prefab, true );
-				return;
+				return null;
 			}
 		}
 
@@ -110,5 +131,7 @@ public sealed partial class GameManager
 				Objects = objects
 			} ) );
 		}
+
+		return objects;
 	}
 }
