@@ -53,6 +53,21 @@ guessing coordinates. Anywhere a verb takes a target, you can pass:
 | `4f2c1a9b` | an object id from `list_props`, or a unique prefix of one |
 | `at:120,40,16` | a world position, resolved onto whatever surface is there |
 
+## Finding a prop
+
+If the map does not already have the thing the player asked for, search
+sbox.game for it. `find_prop` returns idents that `spawn_prop` takes as-is, and
+nothing is downloaded until one is actually spawned.
+
+```
+{{SBX}} find_prop --query "wooden chair"
+{{SBX}} spawn_prop --ident facepunch.wooden_chair --at A
+```
+
+Plain words search the text, and backend filters mix in with them —
+`tag:medieval`, `sort:popular`, `sort:newest`. Results are restricted to models,
+so a gamemode or map ident never comes back as something to spawn.
+
 ## Building
 
 ```
@@ -77,12 +92,42 @@ on it:
 { "kind": "wheel", "created": ["a41f8c02-..."], "position": "120,40,16" }
 ```
 
+## Your companion
+
+You are not a disembodied voice. The first verb that needs a tool spawns a
+character next to the player — your body in the world — and every tool action
+moves it to stand facing whatever it is about to work on, so the toolgun beam
+comes from somewhere visible.
+
+It then stays there. It does not follow the player around, so where you left it
+is a record of the last thing you did, and the player can walk away from a
+finished build without it trailing after them. Summon it when you want it back.
+
+```
+{{SBX}} companion                        # where is it, what is it holding
+{{SBX}} companion --action summon        # call it back to the player
+{{SBX}} companion --action dismiss       # send it away
+```
+
+You never have to summon it by hand. It appears when it is first needed.
+
 ## Tool settings
 
-Every tool has the same settings the player sees in its panel — rope slack, weld
-rigidity, which thruster model to place. `list_tools` shows them with their
-current values, and `set_tool_option` changes them. A setting sticks until
-changed, so set it *before* the verb that uses it:
+Where a tool has settings, they are arguments on the verb that drives it, and
+anything you leave out takes a documented default. Nothing carries over between
+calls, so the same command always builds the same thing:
+
+```
+{{SBX}} stack --target A --count 12 --direction Right --gap 4
+{{SBX}} stack --target A                    # back to count 1, Up, flush
+```
+
+Run `{{SBX}}` with no verb to see every setting a verb takes and what it falls
+back to.
+
+`constrain` and `place_entity` have not been converted yet, so the tools behind
+them are still set separately with `set_tool_option` — and that *does* persist
+for the rest of the session, so set it before the verb that uses it:
 
 ```
 {{SBX}} list_tools --tool rope
@@ -97,9 +142,12 @@ changed, so set it *before* the verb that uses it:
   points touch. That is usually what you want when assembling something. If you
   need both objects to stay put, turn it off first with
   `set_tool_option --tool weld --option EasyMode --value false`.
-- **Using a tool switches the player's tool**, exactly as if they had selected
-  it. This is deliberate — it is how the tool's own logic and permissions stay on
-  the path they were written for, and it lets the player see what you are doing.
+- **You have your own body.** The first verb that needs a tool summons a
+  companion character carrying its own toolgun, and it walks itself round to
+  whatever it is working on so the player can watch. Because that toolgun is its
+  own, switching tools and changing tool settings never disturbs what the player
+  is holding — `list_tools` and `set_tool_option` read and write *your* settings,
+  not theirs.
 - **Positions are `"x,y,z"` strings**, not arrays. One unit is one inch, `+z` is
   up. This is Source engine convention.
 - **`spawn_prop` without `--at` places props where the player is looking.** With
@@ -112,7 +160,9 @@ changed, so set it *before* the verb that uses it:
 - **Each call takes about half a second** while the game reconnects. That is
   normal, not a hang.
 - **Actions are attributed to the player and are undoable** by them, and prop
-  limits and prop protection still apply. Every verb goes through the game's own
+  limits and prop protection still apply. The companion is a separate body, not a
+  separate account: what it builds lands on the player's undo stack and counts
+  against their budget. Every verb goes through the game's own
   tools and commands, not around them — so a limit refusing you is a real answer,
   not a bug. `get_limits` shows what they are.
 

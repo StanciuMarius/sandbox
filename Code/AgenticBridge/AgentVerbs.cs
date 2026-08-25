@@ -31,7 +31,35 @@ internal static class AgentVerbs
 		/// <summary>Argument name to human description, used to build the agent's tool schema.</summary>
 		public Dictionary<string, string> Args { get; init; } = new();
 
+		/// <summary>Settings this verb exposes on the tool it drives. Folded into <see cref="Args"/>.</summary>
+		public ToolParam[] Params { get; init; } = [];
+
 		public Func<JsonObject, Task<JsonNode>> Handler { get; init; }
+	}
+
+	/// <summary>
+	/// One setting a verb exposes, mapped onto a property of the tool it drives.
+	/// </summary>
+	/// <remarks>
+	/// Every declared parameter is written on every call - the value passed, or this default. A
+	/// verb never inherits whatever the tool happened to be set to last time, so a call is
+	/// reproducible on its own terms, which is the only basis an agent can script against. This is
+	/// also why the agent's tools don't keep cookies; see <see cref="ToolMode.OnEnabled"/>.
+	/// </remarks>
+	internal sealed class ToolParam
+	{
+		/// <summary>The verb argument an agent writes, lowercase.</summary>
+		public string Name { get; init; }
+
+		/// <summary>The tool property it sets, when that isn't just <see cref="Name"/>.</summary>
+		public string Property { get; init; }
+
+		/// <summary>Written whenever the caller leaves it out. Must already be the property's type.</summary>
+		public object Default { get; init; }
+
+		public string Description { get; init; }
+
+		public string PropertyName => Property ?? Name;
 	}
 
 	public static IReadOnlyDictionary<string, Verb> All => _verbs;
@@ -86,6 +114,22 @@ internal static class AgentVerbs
 	private static void Build()
 	{
 		// ---- building ----------------------------------------------------
+
+		Add( new Verb
+		{
+			Name = "find_prop",
+			Description = "Search sbox.game for a prop model, for when the player asks for something the map " +
+				"doesn't already have. Returns idents that spawn_prop takes as-is. Nothing is downloaded until " +
+				"one is actually spawned.",
+			Args =
+			{
+				["query"] = "What to look for, e.g. 'wooden chair'. Backend filters can be mixed in with the " +
+					"words - 'tag:medieval', 'sort:popular', 'sort:newest'.",
+				["limit"] = "How many results to return. Default 10, maximum 50.",
+				["offset"] = "How many results to skip, for paging further into a search. Default 0."
+			},
+			Handler = FindProp
+		} );
 
 		Add( new Verb
 		{
@@ -294,13 +338,105 @@ internal static class AgentVerbs
 
 		Add( new Verb
 		{
+			Name = "stack",
+			Description = "Copy an object in a line - the quickest way to build a wall, a tower or a row of " +
+				"pillars without placing each piece. Copies are spaced by the object's own size, so they sit " +
+				"flush unless you ask for a gap.",
+			Args =
+			{
+				["target"] = TargetHelp
+			},
+			Params = StackParams,
+			Handler = Stack
+		} );
+
+		Add( new Verb
+		{
+			Name = "trail",
+			Description = "Give an object a trail that draws a line behind it as it moves. Adds a component to " +
+				"the object rather than creating anything, so 'created' is empty on success.",
+			Args =
+			{
+				["target"] = TargetHelp,
+				["remove"] = "Set true to take the trail off the object instead of adding one. The settings are ignored."
+			},
+			Params = TrailParams,
+			Handler = Trail
+		} );
+
+		Add( new Verb
+		{
+			Name = "decal",
+			Description = "Stick a decal onto a surface - a scorch mark, a sign, a splatter. It parents to " +
+				"whatever it lands on, so it moves with that object.",
+			Args =
+			{
+				["target"] = TargetHelp
+			},
+			Params = DecalParams,
+			Handler = Decal
+		} );
+
+		Add( new Verb
+		{
+			Name = "companion",
+			Description = "The agent's own body in the world: a second character carrying its own toolgun, so " +
+				"driving a tool never takes the one the player is holding, and never changes their tool settings. " +
+				"It is summoned automatically by the first verb that needs it and walks itself round to whatever " +
+				"it is working on. Call with no arguments to find out where it is.",
+			Args =
+			{
+				["action"] = "'status' (the default), 'summon' to bring it back to the player, or 'dismiss' to send it away."
+			},
+			Handler = Companion
+		} );
+
+		Add( new Verb
+		{
 			Name = "get_limits",
-			Description = "Report the server's per-player spawn limits. -1 means unlimited, 0 means none allowed.",
+			Description = "Report the server's per-player spawn limits. -1 means unlimited, 0 means none allowed. " +
+				"These are shared with the player - the companion is a second body, not a second budget.",
 			Handler = GetLimits
 		} );
 	}
 
-	private static void Add( Verb verb ) => _verbs[verb.Name] = verb;
+	private static void Add( Verb verb )
+	{
+		// so an agent reading the verb list sees the settings alongside the other arguments, with
+		// what it gets if it leaves one out
+		foreach ( var param in verb.Params )
+			verb.Args[param.Name] = $"{param.Description} Optional, defaults to {Describe( param.Default )}.";
+
+		_verbs[verb.Name] = verb;
+	}
+
+	/// <summary>
+	/// Activate the tool a verb drives and write every setting the verb declares.
+	/// </summary>
+	/// <remarks>
+	/// Writes all of them, not just the ones passed, so nothing an earlier call did can change what
+	/// this one does.
+	/// </remarks>
+	private static ToolMode Prepare( string toolName, ToolParam[] parameters, JsonObject args )
+	{
+		var tool = AgentTools.Activate( toolName );
+
+		foreach ( var param in parameters )
+		{
+			var option = AgentTools.Options( tool )
+				.FirstOrDefault( x => string.Equals( x.Name, param.PropertyName, StringComparison.Ordinal ) );
+
+			// a rename in the tool rather than anything the caller did
+			if ( option is null )
+				throw new InvalidOperationException( $"'{toolName}' has no '{param.PropertyName}' to back the '{param.Name}' argument." );
+
+			var passed = args.TryGetPropertyValue( param.Name, out var node ) && node is not null;
+
+			option.SetValue( tool, passed ? Coerce( node, option ) : param.Default );
+		}
+
+		return tool;
+	}
 
 	public static async Task<JsonNode> InvokeAsync( string name, JsonObject args )
 	{
@@ -314,6 +450,71 @@ internal static class AgentVerbs
 	}
 
 	// ---- building handlers ----------------------------------------------
+
+	/// <summary>
+	/// Search the backend for models the player could spawn.
+	/// </summary>
+	/// <remarks>
+	/// Narrowed to type:model on the way out, because everything sbox.game hosts is a package -
+	/// gamemodes, maps and libraries included - and an ident for one of those is something spawn_prop
+	/// can only fail on. An explicit type: in the query leaves ours off, so a deliberate search for
+	/// something else is still open.
+	///
+	/// Nothing is downloaded here. An ident comes back as text, and the model is only fetched if the
+	/// agent goes on to spawn it - the cloud path <see cref="PropSpawner"/> already takes for any
+	/// ident that isn't a local .vmdl.
+	/// </remarks>
+	private static async Task<JsonNode> FindProp( JsonObject args )
+	{
+		var query = Str( args, "query" )?.Trim();
+
+		if ( string.IsNullOrWhiteSpace( query ) )
+			throw new ArgumentException( "'query' is required - what to search for, e.g. 'wooden chair'." );
+
+		if ( !query.Contains( "type:", StringComparison.OrdinalIgnoreCase ) )
+			query += " type:model";
+
+		// an agent naming a thing wants the good version of it, not the most recent upload
+		if ( !query.Contains( "sort:", StringComparison.OrdinalIgnoreCase ) )
+			query += " sort:popular";
+
+		var limit = Math.Clamp( Int( args, "limit", 10 ), 1, 50 );
+		var offset = Math.Max( Int( args, "offset", 0 ), 0 );
+
+		var found = await Package.FindAsync( query, limit, offset );
+
+		// a null result is the backend not answering, which is worth saying out loud - an agent told
+		// "no results" would go and try a different wording of a search that never actually ran
+		if ( found is null )
+			throw new InvalidOperationException( "sbox.game didn't answer - the player may be offline. The search didn't run, so this isn't 'nothing matched'." );
+
+		var results = new JsonArray();
+
+		foreach ( var package in found.Packages ?? [] )
+		{
+			var entry = new JsonObject
+			{
+				["ident"] = package.FullIdent,
+				["title"] = package.Title,
+				["by"] = package.Org?.Title ?? "",
+				["votes"] = package.VotesUp
+			};
+
+			if ( !string.IsNullOrWhiteSpace( package.Summary ) )
+				entry["summary"] = package.Summary;
+
+			results.Add( entry );
+		}
+
+		return new JsonObject
+		{
+			["query"] = query,
+			["total"] = found.TotalCount,
+			["returned"] = results.Count,
+			["results"] = results,
+			["note"] = "Pass an ident straight to spawn_prop - the model downloads on first spawn."
+		};
+	}
 
 	private static async Task<JsonNode> SpawnProp( JsonObject args )
 	{
@@ -350,6 +551,10 @@ internal static class AgentVerbs
 
 		// borrow the marker tool's trace - it's the least filtered, and this must not switch tools
 		var point = AgentTargets.Resolve( at, AgentTools.Get( "marker" ), "at" );
+
+		// This path doesn't go through a tool, so pose the companion by hand - otherwise props
+		// appear at a marker while it stands somewhere else entirely.
+		AgentPawn.ForLocalPlayer().PoseAt( point.WorldPosition() );
 
 		var objects = await GameManager.SpawnAt( ident, SurfaceTransform( point, player ), player );
 
@@ -663,6 +868,11 @@ internal static class AgentVerbs
 		if ( AgentTools.Get( toolName ) is BaseConstraintToolMode && input != ToolInput.Reload )
 			throw new ArgumentException( $"'{toolName}' is a constraint tool and needs two points - use the constrain verb instead." );
 
+		// These carry settings, and use_tool would run them on whatever the last call left set -
+		// the very thing their own verbs exist to remove.
+		if ( ParametricTools.TryGetValue( toolName ?? "", out var verbName ) )
+			throw new ArgumentException( $"'{toolName}' has settings, so it has its own verb - call {verbName} instead, passing them as arguments." );
+
 		var tool = AgentTools.Activate( toolName );
 
 		var point = AgentTargets.Resolve( Str( args, "target" ), tool );
@@ -841,6 +1051,149 @@ internal static class AgentVerbs
 
 		return Task.FromResult<JsonNode>( result );
 	}
+
+	// ---- tools with settings, each driven by one verb ------------------
+
+	/// <summary>Tool name to the verb that drives it, for tools whose settings are verb arguments.</summary>
+	private static readonly Dictionary<string, string> ParametricTools = new( StringComparer.OrdinalIgnoreCase )
+	{
+		["stacker"] = "stack",
+		["trail"] = "trail",
+		["decal"] = "decal"
+	};
+
+	private static readonly ToolParam[] StackParams =
+	{
+		new() { Name = "count", Property = "StackCount", Default = 1f,
+			Description = "How many copies to make, 1 to 50." },
+		new() { Name = "direction", Property = "Direction", Default = StackDirection.Up,
+			Description = "Which way to stack: Up, Down, Left, Right, Forward or Back." },
+		new() { Name = "align", Property = "AlignMode", Default = StackAlignMode.Object,
+			Description = "Object to stack along the target's own axes, World to use world axes regardless of how it is turned." },
+		new() { Name = "gap", Property = "PositionOffset", Default = 0f,
+			Description = "Extra space between copies in units, on top of the object's own size." },
+		new() { Name = "anglex", Property = "AngleOffsetX", Default = 0f,
+			Description = "Degrees to turn each copy relative to the one before it, around the first axis across the stack. Non-zero bends the stack into an arc." },
+		new() { Name = "angley", Property = "AngleOffsetY", Default = 0f,
+			Description = "As anglex, around the second across-stack axis." },
+		new() { Name = "freeze", Property = "FreezeAll", Default = true,
+			Description = "Whether the copies are frozen in place. Leave true while building or the stack collapses." }
+	};
+
+	private static readonly ToolParam[] TrailParams =
+	{
+		new() { Name = "line", Property = "Definition", Default = "entities/trails/basic.ldef",
+			Description = "Line definition resource path." },
+		new() { Name = "color", Property = "TrailColor", Default = Color.White,
+			Description = "Trail colour, as 'r,g,b' or 'r,g,b,a' from 0 to 1." },
+		new() { Name = "startwidth", Property = "StartWidth", Default = 4f,
+			Description = "Width in units where the trail leaves the object, 0.1 to 128." },
+		new() { Name = "endwidth", Property = "EndWidth", Default = 0f,
+			Description = "Width at the tail end, 0 to 128. Zero tapers it to a point." },
+		new() { Name = "lifetime", Property = "Lifetime", Default = 1f,
+			Description = "Seconds a piece of trail lingers, 0.1 to 10." },
+		new() { Name = "shadows", Property = "CastShadows", Default = false,
+			Description = "Whether the trail casts shadows." }
+	};
+
+	private static readonly ToolParam[] DecalParams =
+	{
+		new() { Name = "decal", Property = "Decal", Default = "",
+			Description = "Decal resource path. Required - there is no sensible default." }
+	};
+
+	private static Task<JsonNode> Stack( JsonObject args )
+	{
+		var tool = Prepare( "stacker", StackParams, args );
+		var point = AgentTargets.Resolve( Str( args, "target" ), tool );
+
+		if ( !tool.PerformAction( ToolInput.Primary, point ) )
+			throw new InvalidOperationException( Refused( "stack" ) );
+
+		return Task.FromResult<JsonNode>( new JsonObject
+		{
+			["created"] = Created( tool ),
+			["position"] = Vec( point.WorldPosition() )
+		} );
+	}
+
+	private static Task<JsonNode> Trail( JsonObject args )
+	{
+		var removing = string.Equals( Str( args, "remove", "false" ), "true", StringComparison.OrdinalIgnoreCase );
+
+		var tool = Prepare( "trail", TrailParams, args );
+		var point = AgentTargets.Resolve( Str( args, "target" ), tool );
+
+		var input = removing ? ToolInput.Secondary : ToolInput.Primary;
+
+		if ( !tool.PerformAction( input, point ) )
+			throw new InvalidOperationException( Refused( "trail" ) );
+
+		return Task.FromResult<JsonNode>( new JsonObject
+		{
+			["removed"] = removing,
+			["target"] = point.GameObject?.Id.ToString(),
+			["position"] = Vec( point.WorldPosition() )
+		} );
+	}
+
+	private static Task<JsonNode> Decal( JsonObject args )
+	{
+		if ( string.IsNullOrWhiteSpace( Str( args, "decal" ) ) )
+			throw new ArgumentException( "'decal' is required - name the decal resource to place." );
+
+		var tool = Prepare( "decal", DecalParams, args );
+		var point = AgentTargets.Resolve( Str( args, "target" ), tool );
+
+		if ( !tool.PerformAction( ToolInput.Primary, point ) )
+			throw new InvalidOperationException( Refused( "decal" ) );
+
+		return Task.FromResult<JsonNode>( new JsonObject
+		{
+			["created"] = Created( tool ),
+			["position"] = Vec( point.WorldPosition() )
+		} );
+	}
+
+	private static Task<JsonNode> Companion( JsonObject args )
+	{
+		var action = Str( args, "action", "status" ).Trim().ToLowerInvariant();
+
+		switch ( action )
+		{
+			case "dismiss":
+				AgentPawn.DespawnForLocalPlayer();
+				return Task.FromResult<JsonNode>( new JsonObject { ["present"] = false } );
+
+			case "summon":
+			{
+				var pawn = AgentPawn.ForLocalPlayer();
+				pawn.ReturnToOwner();
+				return Task.FromResult<JsonNode>( DescribeCompanion( pawn ) );
+			}
+
+			case "status":
+			{
+				// deliberately doesn't summon - asking where it is shouldn't conjure it
+				var pawn = AgentPawn.Find( Connection.Local );
+
+				return Task.FromResult<JsonNode>( pawn.IsValid()
+					? DescribeCompanion( pawn )
+					: new JsonObject { ["present"] = false } );
+			}
+
+			default:
+				throw new ArgumentException( $"Unknown action '{action}'. Use 'status', 'summon' or 'dismiss'." );
+		}
+	}
+
+	private static JsonObject DescribeCompanion( AgentPawn pawn ) => new()
+	{
+		["present"] = true,
+		["name"] = pawn.Player?.DisplayName,
+		["position"] = Vec( pawn.WorldPosition ),
+		["holding"] = pawn.Toolgun?.GetCurrentMode()?.Name
+	};
 
 	private static Task<JsonNode> GetLimits( JsonObject args )
 	{
