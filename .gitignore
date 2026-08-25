@@ -16,7 +16,10 @@ code/Properties/*
 .sbox/*
 *.generated.*
 *.*_c
-!*.shader_c
+
+# Upstream keeps compiled shaders in the tree (!*.shader_c). We don't: they are
+# rewritten byte-for-byte on most builds here, so they turn up in every diff and
+# would collide on every merge. The editor recompiles them on load.
 *.los
 *.vpk
 *launchSettings.json
