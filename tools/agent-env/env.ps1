@@ -82,7 +82,13 @@ $script:DefaultPort = 7269
 # 80 and 443 are left out because binding them needs elevation on Windows. So two envs
 # can hold a bridge at once, and the user's own session competes for the same two. Envs
 # past that still work - everything except the sbx verbs goes over MCP, which has no cap.
-$script:BridgePorts = @(8080, 8443)
+#
+# 8443 before 8080 on purpose. An unconfigured game scans 8080 first, so leaving it free
+# is what keeps the user's own sbx calls landing in the user's own game. It narrows the
+# overlap rather than removing it: a scanning game that finds 8080 quiet moves on to 8443
+# and can still answer an env's call. Pinning both sides is the only complete fix, and
+# the user's session is theirs to pin - see the skill.
+$script:BridgePorts = @(8443, 8080)
 
 
 # ---------------------------------------------------------------- paths

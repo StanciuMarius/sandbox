@@ -42,9 +42,15 @@ Three consequences you have to live with:
   `setup` for one env, let it finish, then the next.
 - **At most two envs can hold an `sbx` bridge at once**, and the user's own session competes for
   the same two. The engine only lets game code dial localhost on 80/443/8080/8443, and the last
-  two need elevation to bind. Setup assigns 8080 then 8443, and tells you when there are none
-  left. An env without a bridge is still fully usable - everything except the `sbx` verbs runs
-  over MCP, which has no such cap.
+  two need elevation to bind. Setup assigns 8443 first, then 8080, and tells you when there are
+  none left. An env without a bridge is still fully usable - everything except the `sbx` verbs
+  runs over MCP, which has no such cap.
+
+  8443 goes first so that 8080, the port an unconfigured game scans first, stays free for the
+  user's own session. That narrows the overlap without closing it: a scanning game that finds
+  8080 quiet will try 8443 next and can answer a call meant for your env. If calls start coming
+  back with results you don't recognise, that's what happened - ask the user to pin their session
+  with `sb.bridge_url ws://localhost:8080/`, which removes it entirely.
 
 ## Always confirm which editor you are driving
 
