@@ -221,7 +221,9 @@ internal static class AgentVerbs
 			Name = "use_tool",
 			Description = "Run any tool's primary, secondary or reload action against a point. The escape hatch " +
 				"for tools with no dedicated verb - decal, trail, stacker, resizer - and for the secondary actions " +
-				"of ones that do. Check list_tools for what each action does before using it.",
+				"of ones that do. Check list_tools for what each action does before using it. " +
+				"'created' lists new objects and is empty for tools that only modify what is already there, so an " +
+				"empty list is not a failure - the action succeeded if no error came back. Do not retry on it.",
 			Args =
 			{
 				["tool"] = "Tool name. See list_tools.",

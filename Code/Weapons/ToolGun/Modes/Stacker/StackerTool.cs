@@ -373,6 +373,7 @@ public sealed class StackerTool : ToolMode
 			Ownable.Set( clone, Player.Network.Owner );
 			clone.NetworkSpawn( true, null );
 			undo.Add( clone );
+			Track( clone );
 		}
 	}
 }

@@ -69,5 +69,7 @@ public sealed class DecalTool : ToolMode
 		var undo = Player.Undo.Create();
 		undo.Name = "Decal";
 		undo.Add( go );
+
+		Track( go );
 	}
 }
