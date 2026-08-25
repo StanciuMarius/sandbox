@@ -29,9 +29,17 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 
 	/// <summary>
 	/// Explicit bridge URL, overriding the port search. Must be a hostname, not an
-	/// IP literal - Http.HasAllowedScheme rejects raw addresses - and localhost is
-	/// limited to ports 80/443/8080/8443.
+	/// IP literal, and one of the four ports below.
 	/// </summary>
+	/// <remarks>
+	/// Setting this pins one game to one CLI instead of both scanning, which is what
+	/// keeps two sessions on the same machine from answering each other's calls. It
+	/// cannot widen the port list: <c>WebSocket.Connect</c> gates on
+	/// <c>Http.IsAllowedAsync</c>, which only skips the loopback port check when
+	/// <c>Http.IsLocalAllowed</c> is set - and that is false for game code, including
+	/// game code running under the editor in play mode. Verified by measurement: with
+	/// this set to 8443 the game connects, with it set to 9451 it never dials.
+	/// </remarks>
 	[ConVar( "sb.bridge_url", ConVarFlags.Saved, Help = "Explicit agent bridge URL. Empty tries the allowed local ports in order." )]
 	public static string Url { get; set; } = "";
 
@@ -40,6 +48,11 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 	/// because 80 and 443 need elevation to bind on Windows, so a bridge is unlikely
 	/// to be there. A busy port fails the upgrade and we move on to the next.
 	/// </summary>
+	/// <remarks>
+	/// Four ports, of which two are practically usable, is also the ceiling on how many
+	/// games can hold a bridge at once on one machine. Isolated envs past that have to
+	/// work through the editor's MCP server instead, which has no such limit.
+	/// </remarks>
 	private static readonly string[] LocalCandidates =
 	{
 		"ws://localhost:8080/",

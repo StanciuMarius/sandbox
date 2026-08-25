@@ -37,6 +37,12 @@ param(
     # Seconds to wait for the game to connect.
     [int] $TimeoutSeconds = 30,
 
+    # The single port to listen on, rather than scanning. Must be one of the four
+    # below, and matched by sb.bridge_url in the game. Falls back to the SBX_PORT
+    # environment variable. This is how two sessions on one machine stay apart -
+    # without it both scan from 8080 and either can answer the other's game.
+    [int] $Port = 0,
+
     # Verb arguments, as --name value pairs.
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]] $Rest
@@ -44,8 +50,29 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# s&box only dials these, and scans them in this order
+<#
+    The only ports the game can dial on localhost, scanned in this order.
+
+    This is the engine's rule, not ours, and it holds in the editor too:
+    WebSocket.Connect gates on Http.IsAllowedAsync, which only waives the port
+    check for editor, standalone and dedicated-server code - not for game code,
+    even in editor play mode. A game pointed at anything else never dials.
+
+    80 and 443 need elevation to bind on Windows, so in practice there are two.
+#>
 $CandidatePorts = @(8080, 8443, 80, 443)
+
+if ( $Port -le 0 -and $env:SBX_PORT ) { $Port = [int] $env:SBX_PORT }
+
+if ( $Port -gt 0 )
+{
+    if ( $CandidatePorts -notcontains $Port )
+    {
+        throw "Port $Port is not one of $($CandidatePorts -join ', '). The game cannot dial anything else on localhost, so it would never connect."
+    }
+
+    $CandidatePorts = @($Port)
+}
 
 function Write-Info { param([string] $Message) Write-Host $Message }
 
@@ -98,7 +125,12 @@ function Start-Listener {
         }
     }
 
-    throw "Could not bind any of $($CandidatePorts -join ', '). s&box only allows localhost on those ports, so one must be free. Another sbx call may still be running."
+    if ( $Port -gt 0 )
+    {
+        throw "Could not bind port $Port. Another sbx call may still be running, or something else has it."
+    }
+
+    throw "Could not bind any of $($CandidatePorts -join ', '). An unconfigured game only dials those, so one must be free. Another sbx call may still be running. Pass -Port to use a different one, and point the game at it with sb.bridge_url."
 }
 
 <# Wait for the game's WebSocket upgrade and return the socket. #>
