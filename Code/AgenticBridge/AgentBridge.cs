@@ -73,6 +73,15 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 	private const float RetrySeconds = 1f;
 
 	/// <summary>
+	/// How long an attempt is believed to still be running before we start another regardless.
+	/// </summary>
+	/// <remarks>
+	/// Generous - four ports each waiting to fail takes a few seconds. This exists only so a lost
+	/// attempt can't wedge the bridge, not to cut a live one short.
+	/// </remarks>
+	private const float AttemptTimeoutSeconds = 15f;
+
+	/// <summary>
 	/// Whether we've already reported that nothing is listening. Retrying every
 	/// second forever would otherwise bury the console in identical lines.
 	/// </summary>
@@ -119,10 +128,16 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 		if ( _socket is { IsConnected: true } )
 			return;
 
-		if ( _connecting || _sinceAttempt < RetrySeconds )
+		// Either an attempt is in flight, or we're waiting before starting the next one. The
+		// in-flight guard is bounded rather than believed outright: a hotload discards a running
+		// task without unwinding it, so the finally that clears the flag never runs and the bridge
+		// would sit forever waiting on an attempt that no longer exists.
+		if ( _sinceAttempt < (_connecting ? AttemptTimeoutSeconds : RetrySeconds) )
 			return;
 
 		_sinceAttempt = 0;
+		_connecting = true;
+
 		_ = ConnectAsync();
 	}
 
@@ -173,8 +188,6 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 	/// </summary>
 	private async Task ConnectAsync()
 	{
-		_connecting = true;
-
 		try
 		{
 			foreach ( var url in Candidates )
