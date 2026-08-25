@@ -31,3 +31,6 @@ code/Properties/*
 Exports/
 *.user
 *.slnx
+
+# Agent env run artifacts - conclusions and screenshots, one folder per env.
+.agent-runs/
