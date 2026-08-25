@@ -76,6 +76,101 @@ public abstract partial class ToolMode : Component, IToolInfo
 	}
 
 	/// <summary>
+	/// Declare this tool's actions. Called once, the first time the tool is started or driven.
+	/// </summary>
+	/// <remarks>
+	/// This exists separately from <see cref="OnStart"/> because the two are not the same event.
+	/// Every mode gets a component on the toolgun up front, but only the selected one is enabled,
+	/// and <see cref="OnStart"/> never runs for a component that was never enabled. A tool the
+	/// player has not switched to would therefore have an empty action table - fine while actions
+	/// could only come from a click on the active tool, wrong now the agent bridge can drive any of
+	/// them.
+	/// </remarks>
+	protected virtual void RegisterActions() { }
+
+	private bool _actionsRegistered;
+
+	/// <summary>
+	/// Populate the action table if it hasn't been already. Cheap and safe to call repeatedly.
+	/// </summary>
+	protected internal void EnsureActionsRegistered()
+	{
+		// don't latch on a proxy - RegisterAction refuses to add anything there, and we'd cache
+		// an empty table that never gets filled in
+		if ( _actionsRegistered || IsProxy ) return;
+
+		_actionsRegistered = true;
+
+		RegisterActions();
+	}
+
+	protected override void OnStart()
+	{
+		base.OnStart();
+
+		EnsureActionsRegistered();
+	}
+
+	/// <summary>
+	/// Drop any objects tracked from a previous action.
+	/// </summary>
+	protected void ClearTracked() => _createdObjects.Clear();
+
+	/// <summary>
+	/// Run one of this tool's registered actions against a caller-supplied point, rather than
+	/// against wherever the player happens to be looking.
+	/// </summary>
+	/// <remarks>
+	/// This is how the agent bridge uses a tool, and it deliberately takes the long way round:
+	/// it invokes the tool's own callback and raises the same pre- and post-action events a real
+	/// click does. So spawn limits, ownership checks, undo entries and stats all behave exactly as
+	/// they would for a player. An agent gets no path through a tool that the player doesn't have.
+	/// </remarks>
+	/// <returns>
+	/// False if this tool has no action on that input, or if a limit or ownership check refused it.
+	/// </returns>
+	public bool PerformAction( ToolInput input, SelectionPoint aim )
+	{
+		if ( IsProxy ) return false;
+		if ( !aim.IsValid() ) return false;
+
+		EnsureActionsRegistered();
+
+		ToolActionEntry action = null;
+
+		foreach ( var entry in _actions )
+		{
+			if ( entry.Input != input ) continue;
+
+			action = entry;
+			break;
+		}
+
+		if ( action is null ) return false;
+
+		if ( !FireToolAction( input ) )
+			return false;
+
+		ClearTracked();
+
+		SetAimOverride( aim );
+
+		try
+		{
+			action.Callback?.Invoke();
+		}
+		finally
+		{
+			// leaving this set would silently pin every later trace, including the player's own
+			ClearAimOverride();
+		}
+
+		FirePostToolAction( input );
+
+		return true;
+	}
+
+	/// <summary>
 	/// Track a GameObject created by this tool action. These are passed through
 	/// to <see cref="IToolActionEvents.PostActionData.CreatedObjects"/> when the post-event fires.
 	/// </summary>
@@ -123,10 +218,22 @@ public abstract partial class ToolMode : Component, IToolInfo
 	/// Fire <see cref="IToolActionEvents.OnPostToolAction"/> after a successful action.
 	/// Passes a snapshot of tracked objects, then clears the list.
 	/// </summary>
+	/// <summary>
+	/// What the most recent action created, or null if it made nothing.
+	/// </summary>
+	/// <remarks>
+	/// Kept because the tracked list is cleared as the post-event fires, and the agent bridge needs
+	/// to report back what a call actually produced - an agent that spawns a wheel has no other way
+	/// to learn the id of the wheel it just made.
+	/// </remarks>
+	public IReadOnlyList<GameObject> LastCreatedObjects { get; private set; }
+
 	protected void FirePostToolAction( ToolInput input )
 	{
 		var objects = _createdObjects.Count > 0 ? new List<GameObject>( _createdObjects ) : null;
 		_createdObjects.Clear();
+
+		LastCreatedObjects = objects;
 
 		Scene.RunEvent<IToolActionEvents>( x => x.OnPostToolAction( new IToolActionEvents.PostActionData
 		{

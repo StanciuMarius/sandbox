@@ -16,10 +16,8 @@ public sealed class HoverballTool : ToolMode
 
 	public override bool UseSnapGrid => true;
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.hoverballtool.place", OnPlace );
 	}
 

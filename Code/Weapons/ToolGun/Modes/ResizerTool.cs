@@ -11,10 +11,8 @@ public sealed class ResizerTool : ToolMode
 
 	TimeSince timeSinceAction = 0;
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.resizer.grow", OnGrow, InputMode.Down );
 		RegisterAction( ToolInput.Secondary, () => "#tool.hint.resizer.shrink", OnShrink, InputMode.Down );
 		RegisterAction( ToolInput.Reload, () => "#tool.hint.resizer.reset", OnReset );

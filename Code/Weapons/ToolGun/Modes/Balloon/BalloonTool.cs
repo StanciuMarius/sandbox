@@ -28,10 +28,8 @@ public sealed class BalloonTool : ToolMode
 
 	Color _previewTint = Color.Random;
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.balloon.place_rope", OnPlaceWithRope );
 		RegisterAction( ToolInput.Secondary, () => "#tool.hint.balloon.place", OnPlaceWithoutRope );
 	}

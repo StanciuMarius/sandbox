@@ -26,10 +26,8 @@ public sealed class TrailTool : ToolMode
 
 	public override string Description => "Add or remove trails from objects";
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "Add Trail", OnAddTrail );
 		RegisterAction( ToolInput.Secondary, () => "Remove Trail", OnRemoveTrail );
 	}

@@ -7,10 +7,8 @@ public sealed class UnbreakableTool : ToolMode
 {
 	public override string Description => "#tool.hint.unbreakable.description";
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.unbreakable.set", OnSetUnbreakable );
 		RegisterAction( ToolInput.Secondary, () => "#tool.hint.unbreakable.unset", OnUnsetUnbreakable );
 	}

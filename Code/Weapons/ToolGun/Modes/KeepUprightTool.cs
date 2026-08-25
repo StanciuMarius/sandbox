@@ -117,6 +117,57 @@ public sealed class KeepUprightTool : ToolMode
 		}
 	}
 
+	/// <summary>
+	/// Anchor an object upright against the world, or link two objects upright together when
+	/// <paramref name="point2"/> is given. The agent bridge's way in - this tool reads input
+	/// directly in <see cref="OnControl"/>, so there's no registered action to invoke.
+	/// </summary>
+	public bool PerformUpright( SelectionPoint point1, SelectionPoint? point2 = null )
+	{
+		if ( IsProxy ) return false;
+		if ( !point1.IsValid() ) return false;
+
+		var input = point2.HasValue ? ToolInput.Secondary : ToolInput.Primary;
+
+		if ( point2 is SelectionPoint second )
+		{
+			if ( !second.IsValid() ) return false;
+			if ( second.GameObject == point1.GameObject ) return false;
+		}
+
+		if ( !FireToolAction( input ) )
+			return false;
+
+		ClearTracked();
+
+		if ( point2 is SelectionPoint linked )
+			CreateLinked( point1, linked );
+		else
+			CreateWorldAnchor( point1 );
+
+		FirePostToolAction( input );
+
+		return true;
+	}
+
+	/// <summary>
+	/// Strip upright constraints off an object - the programmatic equivalent of reload.
+	/// </summary>
+	public bool PerformRemoveUpright( GameObject go )
+	{
+		if ( IsProxy ) return false;
+		if ( !go.IsValid() ) return false;
+
+		if ( !FireToolAction( ToolInput.Reload ) )
+			return false;
+
+		RemoveConstraints( go.Network.RootGameObject ?? go );
+
+		FirePostToolAction( ToolInput.Reload );
+
+		return true;
+	}
+
 	[Rpc.Host( NetFlags.OwnerOnly )]
 	private void CreateWorldAnchor( SelectionPoint point )
 	{

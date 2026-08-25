@@ -24,10 +24,8 @@ public sealed class EmitterTool : ToolMode
 
 	public override string Description => "#tool.hint.emittertool.description";
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.emittertool.place", OnPlace );
 		RegisterAction( ToolInput.Secondary, () => "#tool.hint.emittertool.place_no_weld", OnPlaceNoWeld );
 	}

@@ -10,10 +10,8 @@ public sealed class MassTool : ToolMode
 
 	public override string Description => "#tool.hint.mass.description";
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.mass.set", OnSetMass );
 		RegisterAction( ToolInput.Secondary, () => "#tool.hint.mass.copy", OnCopyMass );
 		RegisterAction( ToolInput.Reload, () => "#tool.hint.mass.reset", OnResetMass );

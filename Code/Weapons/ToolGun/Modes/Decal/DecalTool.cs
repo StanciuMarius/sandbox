@@ -14,10 +14,8 @@ public sealed class DecalTool : ToolMode
 
 	TimeSince timeSinceShoot = 0;
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.decaltool.place", OnPlace );
 		RegisterAction( ToolInput.Secondary, () => "#tool.hint.decaltool.paint", OnPaint, InputMode.Down );
 	}

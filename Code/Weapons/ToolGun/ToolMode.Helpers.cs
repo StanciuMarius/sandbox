@@ -82,10 +82,28 @@
 	}
 
 	/// <summary>
-	/// Get a SelectionPoint from the tool gun owner's eyes.
+	/// While set, <see cref="TraceSelect"/> hands back this point instead of tracing. Lets the agent
+	/// bridge aim a tool at a marker without hijacking the player's camera to point at it.
+	/// </summary>
+	private SelectionPoint? _aimOverride;
+
+	/// <summary>
+	/// Aim this tool at a fixed point. Always pair with <see cref="ClearAimOverride"/> in a finally
+	/// block - left set, it would quietly pin the player's own aim too.
+	/// </summary>
+	internal void SetAimOverride( SelectionPoint point ) => _aimOverride = point;
+
+	internal void ClearAimOverride() => _aimOverride = null;
+
+	/// <summary>
+	/// Get a SelectionPoint from the tool gun owner's eyes, or the overridden aim point if one is
+	/// set.
 	/// </summary>
 	public SelectionPoint TraceSelect()
 	{
+		if ( _aimOverride is SelectionPoint aimed )
+			return aimed;
+
 		var player = Toolgun?.Owner;
 		if ( !player.IsValid() ) return default;
 

@@ -70,6 +70,34 @@ public partial class Toolgun : ScreenWeapon
 
 	public ToolMode GetCurrentMode() => GetComponent<ToolMode>();
 
+	/// <summary>
+	/// Switch to a mode straight away, without the RPC round trip <see cref="SetToolMode"/> takes.
+	/// </summary>
+	/// <remarks>
+	/// The agent bridge needs the mode live in the same frame it acts on it, and a mode that has
+	/// never been enabled is not somewhere to be firing RPCs from. Switching for real - rather than
+	/// quietly reaching into a disabled component - also means the player can see which tool the
+	/// agent is using, on the toolgun screen like any other switch.
+	/// </remarks>
+	public ToolMode ActivateMode( ToolMode mode )
+	{
+		if ( !mode.IsValid() ) return null;
+
+		var current = GetCurrentMode();
+		if ( current == mode ) return mode;
+
+		if ( current.IsValid() )
+			current.Enabled = false;
+
+		mode.Enabled = true;
+		GameObject.Enabled = true;
+
+		if ( Networking.IsHost )
+			Network.Refresh( GameObject );
+
+		return mode;
+	}
+
 	public T GetMode<T>() where T : ToolMode
 	{
 		return GetComponent<T>( true );

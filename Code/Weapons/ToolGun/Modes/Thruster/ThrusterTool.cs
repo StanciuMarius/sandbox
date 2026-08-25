@@ -17,10 +17,8 @@ public sealed class ThrusterTool : ToolMode
 
 	Vector3 _axis = Vector3.Up;
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.thrustertool.place", OnPlace );
 		RegisterAction( ToolInput.Secondary, () => "#tool.hint.thrustertool.place_no_weld", OnPlaceNoWeld );
 		RegisterAction( ToolInput.Reload, () => "#tool.hint.thrustertool.toggle_axis", OnToggleAxis );

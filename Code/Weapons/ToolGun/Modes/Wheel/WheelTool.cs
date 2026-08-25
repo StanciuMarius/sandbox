@@ -17,10 +17,8 @@ public sealed class WheelTool : ToolMode
 	Vector3 _axis = Vector3.Right;
 	bool _reversed = false;
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.wheeltool.place", OnPlace );
 		RegisterAction( ToolInput.Secondary, () => "#tool.hint.wheeltool.toggle_axis", OnToggleAxis );
 		RegisterAction( ToolInput.Reload, () => "#tool.hint.wheeltool.toggle_direction", OnToggleDirection );

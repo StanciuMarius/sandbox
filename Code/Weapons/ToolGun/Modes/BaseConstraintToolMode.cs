@@ -170,4 +170,51 @@
 	protected abstract void CreateConstraint( SelectionPoint point1, SelectionPoint point2 );
 
 	protected virtual SelectionPoint? GetSecondaryPoint( SelectionPoint select ) => default;
+
+	/// <summary>
+	/// Create this constraint between two given points in one go, instead of through the two-click
+	/// flow in <see cref="OnControl"/>.
+	/// </summary>
+	/// <remarks>
+	/// The agent bridge's way into the constraint tools. They can't go through
+	/// <see cref="ToolMode.PerformAction"/> like the rest, because they read input directly here
+	/// rather than registering actions - there is no callback for it to invoke. This raises the same
+	/// pre- and post-action events a real second click does, so limits and undo still apply.
+	/// </remarks>
+	/// <returns>False if the two points don't make a valid constraint, or a limit refused it.</returns>
+	public bool PerformConstraint( SelectionPoint point1, SelectionPoint point2 )
+	{
+		if ( IsProxy ) return false;
+		if ( !UpdateValidity( point1, point2 ) ) return false;
+
+		if ( !FireToolAction( ToolInput.Primary ) )
+			return false;
+
+		ClearTracked();
+
+		Create( point1, point2 );
+
+		FirePostToolAction( ToolInput.Primary );
+
+		return true;
+	}
+
+	/// <summary>
+	/// Strip the constraints this tool manages off an object and everything linked to it - the
+	/// programmatic equivalent of the tool's reload action.
+	/// </summary>
+	public bool PerformRemoveConstraints( GameObject go )
+	{
+		if ( IsProxy ) return false;
+		if ( !go.IsValid() ) return false;
+
+		if ( !FireToolAction( ToolInput.Reload ) )
+			return false;
+
+		RemoveConstraints( go.Network.RootGameObject ?? go );
+
+		FirePostToolAction( ToolInput.Reload );
+
+		return true;
+	}
 }

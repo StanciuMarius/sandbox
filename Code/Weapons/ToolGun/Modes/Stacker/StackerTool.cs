@@ -85,10 +85,8 @@ public sealed class StackerTool : ToolMode
 
 	public override string Description => "#tool.hint.stacker.description";
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.stacker.stack", OnStack );
 		RegisterAction( ToolInput.Secondary, () => "#tool.hint.stacker.cycle_alignment", CycleAlignment );
 		RegisterAction( ToolInput.Reload, () => "#tool.hint.stacker.cycle_direction", CycleDirection );

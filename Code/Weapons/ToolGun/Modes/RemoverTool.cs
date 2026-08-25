@@ -7,10 +7,8 @@ public sealed class RemoverTool : ToolMode
 	public override bool TraceHitboxes => true;
 	public override string Description => "#tool.hint.remover.description";
 
-	protected override void OnStart()
+	protected override void RegisterActions()
 	{
-		base.OnStart();
-
 		RegisterAction( ToolInput.Primary, () => "#tool.hint.remover.remove", OnRemove );
 	}
 
