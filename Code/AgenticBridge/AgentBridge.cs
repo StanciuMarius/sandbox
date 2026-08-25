@@ -84,6 +84,10 @@ internal sealed class AgentBridge : GameObjectSystem<AgentBridge>
 
 	public AgentBridge( Scene scene ) : base( scene )
 	{
+		// unpack regardless of whether the bridge is on, so the Q menu can always
+		// show the player what to run
+		AgentCli.Install();
+
 		if ( !Enabled )
 			return;
 

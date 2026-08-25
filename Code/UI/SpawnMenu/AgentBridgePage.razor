@@ -28,23 +28,13 @@
     </div>
 
     <div class="control-row">
-        <label class="left" style="font-size: 12px; opacity: 0.6;">@InstallCommand</label>
+        <label class="left" style="font-size: 12px; opacity: 0.6;">@AgentCli.Command</label>
     </div>
 
 </root>
 
 @code
 {
-    /// <summary>
-    /// What the player pastes into their terminal. Claude Code launches the bridge
-    /// itself from then on, so there is no process for them to run or manage.
-    ///
-    /// --scope user is essential: 'claude mcp add' defaults to local scope, which
-    /// registers the server only for the directory it was run in. A player has no
-    /// project directory, so without this it works once and then seems to vanish.
-    /// </summary>
-    const string InstallCommand = "claude mcp add --scope user sandbox -- npx -y @marsz/sandbox-bridge";
-
     static readonly string EnabledDescription = "#spawnmenu.utility.agent_enabled_description";
     static readonly string CommandTooltip = "#spawnmenu.utility.agent_copy_description";
 
@@ -75,10 +65,10 @@
 
     void CopyCommand()
     {
-        Clipboard.SetText( InstallCommand );
+        Clipboard.SetText( AgentCli.Command );
         timeSinceCopied = 0f;
         StateHasChanged();
     }
 
-    protected override int BuildHash() => HashCode.Combine( AgentBridge.Enabled, AgentBridge.IsLinked, JustCopied );
+    protected override int BuildHash() => HashCode.Combine( AgentBridge.Enabled, AgentBridge.IsLinked, JustCopied, AgentCli.ScriptPath );
 }
