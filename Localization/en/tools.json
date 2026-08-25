@@ -111,6 +111,11 @@
     "tool.hint.stacker.cycle_alignment": "Cycle Alignment",
     "tool.hint.stacker.cycle_direction": "Cycle Direction",
 
+    "tool.hint.marker.description": "Marks points for an AI agent to build on",
+    "tool.hint.marker.place": "Place marker",
+    "tool.hint.marker.remove": "Remove marker",
+    "tool.hint.marker.clear": "Clear all markers",
+
     "tool.name.weld": "Weld",
     "tool.name.rope": "Rope",
     "tool.name.elastic": "Elastic",
@@ -133,6 +138,7 @@
     "tool.name.trail": "Trail",
     "tool.name.duplicator": "Duplicator",
     "tool.name.stacker": "Stacker",
+    "tool.name.marker": "Marker",
 
     "tool.group.constraints": "Constraints",
     "tool.group.tools": "Tools",
