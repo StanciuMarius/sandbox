@@ -658,6 +658,44 @@ function Copy-BuildArtifacts
 	Write-Host ("  seeded {0:N0} files, {1:N1} GB" -f $seeded.Count, ($seeded.Sum / 1GB))
 }
 
+function Copy-InputConfig
+{
+	<#
+		Give the env the user's own key bindings.
+
+		config/input is keyed by project ident, so the Ident rewrite that isolates an env
+		also cuts it off from marsz.sandboxmcp.json and the game falls back to WASD. That
+		is a poor way to find out you've been dropped into a different control scheme, and
+		it costs nothing to carry across.
+
+		Copied on every launch rather than only when missing: the user's bindings are the
+		source of truth, and the game writes this file back on quit - so a copy-if-missing
+		rule would let one session that quit before the file existed pin an env to the
+		defaults permanently. The cost is that rebinding keys inside an env doesn't stick.
+	#>
+	param([object]$Paths, [string]$Org, [string]$OriginalIdent)
+
+	$dir = Join-Path $Paths.Engine 'config\input'
+	$copied = @()
+
+	foreach ( $suffix in @('', '#local') )
+	{
+		$from = Join-Path $dir "$Org.$OriginalIdent$suffix.json"
+		if ( -not (Test-Path $from ) ) { continue }
+
+		Copy-Item $from (Join-Path $dir "$Org.$($Paths.Ident)$suffix.json") -Force
+		$copied += "$OriginalIdent$suffix"
+	}
+
+	if ( $copied.Count -eq 0 )
+	{
+		Write-Host "note: no input config found for $Org.$OriginalIdent - the env will use default bindings." -ForegroundColor DarkYellow
+		return
+	}
+
+	Write-Host "  carried over key bindings from $Org.$OriginalIdent"
+}
+
 function Initialize-SceneCookie
 {
 	<#
@@ -868,6 +906,10 @@ function Start-Env
 		Write-Host "seeding compiled and cloud assets from the main checkout"
 		Copy-BuildArtifacts -Paths $paths
 	}
+
+	# Not part of seeding - bindings are the user's setup rather than a build artifact,
+	# and cost nothing to carry, so -NoSeed doesn't skip them.
+	Copy-InputConfig -Paths $paths -Org $project.Org -OriginalIdent $project.OriginalIdent
 
 	$scene = Initialize-SceneCookie -Paths $paths
 
