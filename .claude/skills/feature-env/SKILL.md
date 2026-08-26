@@ -106,7 +106,8 @@ can be answered by the user's game instead of yours - and it will look like it w
 ## Build
 
 Ordinary work in `../sandbox-envs/<feature>`, on the `agent/<feature>` branch. Commit there as you
-go; the branch is what survives teardown.
+go, and leave the branch checked out in that worktree - the user reads your diff from it, and a
+later agent may be asked to merge it with other envs'.
 
 The editor compiles on save. Never ask the user to focus a window, and check `compile_status`
 rather than reading the console for success - see the **sbox-hotload** skill, which also explains
@@ -164,22 +165,28 @@ State the outcome plainly. A conclusion saying a thing half works is useful; one
 works because the code looks right is worse than nothing, because the env is gone and nobody can
 check. If you never got it working, say so and write down what you learned - that is a result.
 
-## Tear down
+## Stop when you are done - and stop there
 
 ```
-./tools/agent-env/env.ps1 teardown <feature>
+./tools/agent-env/env.ps1 stop <feature>
 ```
 
-Closes the editor, removes the worktree, **keeps the branch and keeps `.agent-runs/<feature>/`**.
-Removing the worktree reclaims the ~1.4GB of seeded assets, so tear an env down once you are done
-with it rather than leaving it parked.
+Closes the editor and leaves everything else exactly as it is: the worktree, the branch, the run
+artifacts. That is the whole of your cleanup.
 
-Add `-Purge` to also delete the engine state your Ident created - the asset cache and data
-directory. Worth doing when you are finished with a line of work; skip it if you will set the
-same env up again.
+Stop rather than just walking away. An editor holds 9-14GB, and that memory is what the next
+agent's env needs to start - only about three can run at once. Stopping also releases the bridge
+port back to the pool.
 
-Add `-DeleteBranch` only once the work is merged or explicitly abandoned. Never delete a branch
-you have not been told to.
+**Do not tear anything down.** Not the worktree, not the branch, not `.agent-runs/`. The user
+validates your work by reopening your env and reading your diff, which they cannot do if you have
+removed it. `env.ps1 teardown` exists, and it is theirs to run when they have finished with a
+whole round of work - it is never part of finishing a feature. The same goes for `-DeleteBranch`:
+never delete a branch, including your own.
+
+Commit everything before you stop. The branch is what survives, and teardown - whenever the user
+eventually runs it - refuses to remove a worktree holding uncommitted work rather than destroying
+it, so anything you leave uncommitted turns into an obstacle for them later.
 
 ## Checking on things
 

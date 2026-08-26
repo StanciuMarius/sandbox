@@ -13,15 +13,25 @@
 	which is why setup rewrites it and why the modified sandbox.sbproj is hidden from
 	git rather than committed.
 
+	An env outlives the agent that made it. Agents set one up, work, and stop the editor;
+	the worktree, the branch and the run artifacts stay put so the user can validate the
+	work, ask for changes, or have another agent merge several envs together. Removing
+	any of it is teardown, which only ever runs because the user asked for it.
+
 .EXAMPLE
-	./tools/agent-env/env.ps1 setup rope-slack
+	./tools/agent-env/env.ps1 setup rope-slack     # worktree, branch, editor
 	./tools/agent-env/env.ps1 shot rope-slack -Name after-fix
-	./tools/agent-env/env.ps1 teardown rope-slack
+	./tools/agent-env/env.ps1 stop rope-slack      # what an agent does when finished
+	./tools/agent-env/env.ps1 open rope-slack      # bring it back to look at
+
+.EXAMPLE
+	./tools/agent-env/env.ps1 teardown -All -Runs -Purge
+	Clear up after a whole round of parallel agents. Keeps the branches.
 #>
 [CmdletBinding()]
 param(
 	[Parameter(Mandatory, Position = 0)]
-	[ValidateSet('setup', 'open', 'status', 'play', 'shot', 'mcp', 'teardown')]
+	[ValidateSet('setup', 'open', 'stop', 'status', 'play', 'shot', 'mcp', 'teardown')]
 	[string]$Command,
 
 	# The env's name. Lowercase, digits and dashes - it becomes a branch, a directory
@@ -55,9 +65,17 @@ param(
 	# disk, costs a full recompile and re-download on first launch.
 	[switch]$NoSeed,
 
-	# teardown: also delete the branch, and the engine state this env's Ident created.
+	# teardown: also delete the branch, the engine state this env's Ident created, and
+	# the run artifacts. All opt-in - teardown on its own only removes the worktree.
 	[switch]$DeleteBranch,
 	[switch]$Purge,
+	[switch]$Runs,
+
+	# teardown: every env at once, for clearing up after a round of parallel agents.
+	[switch]$All,
+
+	# teardown: go ahead even though the worktree holds uncommitted work.
+	[switch]$Force,
 
 	# setup: how long to wait for the editor to answer. Seeded, that's seconds; with
 	# -NoSeed the engine compiles and downloads everything first, which is minutes.
@@ -323,8 +341,15 @@ function Get-ClaimedPorts
 			$record = Get-Content $_.FullName -Raw | ConvertFrom-Json
 			# Reopening an env shouldn't lose to its own claim from last time.
 			if ( $ExceptFeature -and $record.Feature -eq $ExceptFeature ) { return }
-			if ( -not $record.PSObject.Properties['Worktree'] ) { return }
-			if ( -not (Test-Path $record.Worktree) ) { return }
+			if ( -not $record.PSObject.Properties['Pid'] ) { return }
+
+			# A live editor holds the port; a stopped env does not. Worktrees outlive their
+			# editors now, so keying this on the directory would let a handful of finished
+			# runs permanently exhaust the two bridge ports. The name check guards against
+			# the pid having been recycled by something else.
+			$process = Get-Process -Id $record.Pid -ErrorAction SilentlyContinue
+			if ( $null -eq $process -or $process.Name -ne 'sbox-dev' ) { return }
+
 			if ( $record.PSObject.Properties[$Field] ) { $record.$Field }
 		})
 }
@@ -727,6 +752,46 @@ function Set-WorktreeMcpConfig
 
 # ---------------------------------------------------------------- commands
 
+function Enter-SetupLock
+{
+	<#
+		Serialise setup across processes.
+
+		McpServerPort is one editor-wide preference read at startup, so setup has to write
+		it, launch, and wait for that editor to bind before the next one may write it
+		again. Several agents each calling setup would otherwise trample the value and two
+		could be handed the same port. Held until the editor answers, which is why the
+		wait is generous.
+	#>
+	param([object]$Paths, [int]$TimeoutSeconds = 2400)
+
+	New-Item -ItemType Directory -Force -Path $Paths.RunsRoot | Out-Null
+	$lockFile = Join-Path $Paths.RunsRoot '.setup.lock'
+
+	$deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+	$waiting = $false
+
+	while ( (Get-Date) -lt $deadline )
+	{
+		try
+		{
+			return [System.IO.File]::Open($lockFile, 'OpenOrCreate', 'ReadWrite', 'None')
+		}
+		catch
+		{
+			if ( -not $waiting )
+			{
+				Write-Host "another env is being set up - waiting for it to finish"
+				$waiting = $true
+			}
+
+			Start-Sleep -Seconds 3
+		}
+	}
+
+	throw "Timed out after ${TimeoutSeconds}s waiting for another setup to release $lockFile. If nothing is running, delete it."
+}
+
 function Invoke-Setup
 {
 	Assert-FeatureName $Feature
@@ -763,7 +828,10 @@ function Invoke-Setup
 			-GitArgs @('-C', $paths.Repo, 'worktree', 'add', '-b', $paths.Branch, $paths.Worktree, 'HEAD'))
 	}
 
-	Start-Env -Paths $paths -Feature $Feature -BaseCommit $baseCommit
+	$lock = Enter-SetupLock -Paths $paths
+
+	try { Start-Env -Paths $paths -Feature $Feature -BaseCommit $baseCommit }
+	finally { $lock.Dispose() }
 }
 
 function Start-Env
@@ -967,8 +1035,14 @@ function Invoke-Open
 	$knownOriginal = ''
 	if ( $record.PSObject.Properties['OriginalIdent'] ) { $knownOriginal = $record.OriginalIdent }
 
-	Start-Env -Paths $paths -Feature $Feature -BaseCommit $baseCommit -Created $created `
-		-PreferPort $record.Port -PreferBridgePort $preferBridge -KnownOriginalIdent $knownOriginal
+	$lock = Enter-SetupLock -Paths $paths
+
+	try
+	{
+		Start-Env -Paths $paths -Feature $Feature -BaseCommit $baseCommit -Created $created `
+			-PreferPort $record.Port -PreferBridgePort $preferBridge -KnownOriginalIdent $knownOriginal
+	}
+	finally { $lock.Dispose() }
 }
 
 function Invoke-Status
@@ -1084,92 +1158,180 @@ function Invoke-McpCommand
 	}
 }
 
-function Invoke-Teardown
+function Stop-EnvEditor
 {
-	Assert-FeatureName $Feature
-	$paths = Get-Paths $Feature
-	$record = Read-EnvRecord -Paths $paths
+	<#
+		Close one env's editor, leaving everything on disk. Matched by pid as well as by
+		the port serving the worktree, so this can never close somebody else's editor.
+	#>
+	param([object]$Paths, [object]$Record)
 
-	# --- close the editor, and only this env's editor
-	$port = Find-EditorPort -ProjectRoot $record.Worktree
-	if ( $port -ne 0 )
+	$port = Find-EditorPort -ProjectRoot $Record.Worktree
+	if ( $port -eq 0 ) { return $false }
+
+	$process = Get-Process -Id $Record.Pid -ErrorAction SilentlyContinue
+
+	if ( $null -eq $process -or $process.Name -ne 'sbox-dev' )
 	{
-		$process = Get-Process -Id $record.Pid -ErrorAction SilentlyContinue
-
-		if ( $null -ne $process -and $process.Name -eq 'sbox-dev' )
-		{
-			Write-Host "closing editor (pid $($record.Pid))"
-			[void]$process.CloseMainWindow()
-			if ( -not $process.WaitForExit(30000) )
-			{
-				Write-Host "  it didn't close on its own, killing it"
-				Stop-Process -Id $record.Pid -Force
-			}
-		}
-		else
-		{
-			Write-Host "warning: an editor is serving this worktree on port $port but pid $($record.Pid) is gone. Close it by hand." -ForegroundColor Yellow
-		}
+		Write-Host "warning: an editor is serving this worktree on port $port but pid $($Record.Pid) is gone. Close it by hand." -ForegroundColor Yellow
+		return $false
 	}
 
-	# --- unpin the shared bridge convar
-	#
+	Write-Host "closing editor (pid $($Record.Pid))"
+	[void]$process.CloseMainWindow()
+
+	if ( -not $process.WaitForExit(30000) )
+	{
+		Write-Host "  it didn't close on its own, killing it"
+		Stop-Process -Id $Record.Pid -Force
+	}
+
 	# sb.bridge_url is ConVarFlags.Saved and every project writes it to the same
 	# config/convar/game.json, so an env's pin outlives the env and would send the user's
 	# next session to a port nothing owns. Clearing it in the running editor doesn't
 	# settle it - the convar save races the shutdown, and the pinned value can still win.
 	# Repairing the file after the process is gone is the only ordering that holds.
-	Clear-BridgeConvar -Paths $paths
+	Clear-BridgeConvar -Paths $Paths
 
-	# --- worktree and branch
-	if ( Test-Path $record.Worktree )
+	return $true
+}
+
+function Invoke-Stop
+{
+	<#
+		What an agent does when it's finished: shut the editor, leave the worktree, the
+		branch and the run artifacts exactly where they are. An editor is 9-14GB, so
+		stopping is what lets the next env start; nothing else about the env is disturbed
+		and `open` brings it straight back.
+	#>
+	Assert-FeatureName $Feature
+	$paths = Get-Paths $Feature
+	$record = Read-EnvRecord -Paths $paths
+
+	$stopped = Stop-EnvEditor -Paths $paths -Record $record
+
+	if ( -not $stopped ) { Write-Host "env '$Feature' has no editor running." }
+	else { Write-Host "env '$Feature' stopped. Worktree and branch kept." -ForegroundColor Green }
+
+	Write-Host "  worktree  $($record.Worktree)"
+	Write-Host "  branch    $($record.Branch)"
+	Write-Host "  reopen    env.ps1 open $Feature"
+}
+
+function Remove-Env
+{
+	<#
+		Remove one env's worktree, and whatever else was asked for. Never called except
+		when the user asks for it by name - agents stop, they don't tear down.
+	#>
+	param([object]$Paths, [object]$Record)
+
+	Write-Host ""
+	Write-Host "--- $($Record.Feature)"
+
+	[void](Stop-EnvEditor -Paths $Paths -Record $Record)
+
+	# --- refuse to destroy work that was never committed
+	#
+	# The branch preserves commits, so removing a worktree is safe exactly to the extent
+	# that its work is committed. Uncommitted edits and untracked files are not on the
+	# branch and would go with the directory.
+	if ( Test-Path $Record.Worktree )
 	{
+		$dirty = (Invoke-Git -GitArgs @('-C', $Record.Worktree, 'status', '--porcelain')).Output.Trim()
+
+		if ( $dirty -and -not $Force )
+		{
+			throw "$($Record.Feature) has uncommitted work, which the branch does not hold and this would destroy:`n$dirty`n`nCommit it in $($Record.Worktree), or pass -Force to discard it."
+		}
+
+		if ( $dirty ) { Write-Host "discarding uncommitted work (-Force)" -ForegroundColor DarkYellow }
+
 		[void](Assert-Git -What 'Removing the worktree (the editor may still have files open)' `
-			-GitArgs @('-C', $paths.Repo, 'worktree', 'remove', '--force', $record.Worktree))
+			-GitArgs @('-C', $Paths.Repo, 'worktree', 'remove', '--force', $Record.Worktree))
 	}
 
-	[void](Invoke-Git -GitArgs @('-C', $paths.Repo, 'worktree', 'prune'))
+	[void](Invoke-Git -GitArgs @('-C', $Paths.Repo, 'worktree', 'prune'))
 
 	if ( $DeleteBranch )
 	{
-		[void](Assert-Git -What 'Deleting the branch' -GitArgs @('-C', $paths.Repo, 'branch', '-D', $record.Branch))
+		[void](Assert-Git -What 'Deleting the branch' -GitArgs @('-C', $Paths.Repo, 'branch', '-D', $Record.Branch))
+		Write-Host "deleted branch $($Record.Branch)"
 	}
 	else
 	{
-		Write-Host "keeping branch $($record.Branch) - delete it with -DeleteBranch once merged."
+		Write-Host "kept branch $($Record.Branch) - delete it with -DeleteBranch once merged"
 	}
 
 	# --- engine state this Ident created
 	if ( $Purge )
 	{
-		if ( $record.Ident -eq $record.OriginalIdent -or $record.Ident -notmatch '-' )
+		if ( $Record.Ident -eq $Record.OriginalIdent -or $Record.Ident -notmatch '-' )
 		{
-			throw "Refusing to purge '$($record.Ident)' - it doesn't look like an env-specific Ident."
+			throw "Refusing to purge '$($Record.Ident)' - it doesn't look like an env-specific Ident."
 		}
 
-		$data = Join-Path (Join-Path $paths.Engine 'data') $record.Org
-		$inputDir = Join-Path $paths.Engine 'config\input'
+		$data = Join-Path (Join-Path $Paths.Engine 'data') $Record.Org
+		$inputDir = Join-Path $Paths.Engine 'config\input'
 
 		$targets = @(
-			(Join-Path $data $record.Ident)
-			(Join-Path $data "$($record.Ident)#local")
-			(Join-Path (Join-Path $paths.Engine '.source2') "assets.$($record.Org).$($record.Ident).cache")
-			(Join-Path $inputDir "$($record.Org).$($record.Ident).json")
-			(Join-Path $inputDir "$($record.Org).$($record.Ident)#local.json")
+			(Join-Path $data $Record.Ident)
+			(Join-Path $data "$($Record.Ident)#local")
+			(Join-Path (Join-Path $Paths.Engine '.source2') "assets.$($Record.Org).$($Record.Ident).cache")
+			(Join-Path $inputDir "$($Record.Org).$($Record.Ident).json")
+			(Join-Path $inputDir "$($Record.Org).$($Record.Ident)#local.json")
 		)
 
 		foreach ( $target in $targets )
 		{
-			if ( Test-Path $target )
-			{
-				Write-Host "removing $target"
-				Remove-Item $target -Recurse -Force
-			}
+			if ( Test-Path $target ) { Remove-Item $target -Recurse -Force }
 		}
+
+		Write-Host "purged engine state for $($Record.Ident)"
+	}
+
+	# --- the run artifacts, only when asked
+	if ( $Runs )
+	{
+		if ( Test-Path $Record.RunDir ) { Remove-Item $Record.RunDir -Recurse -Force }
+		Write-Host "removed run artifacts at $($Record.RunDir)"
+	}
+	else
+	{
+		Write-Host "kept run artifacts at $($Record.RunDir)"
+	}
+}
+
+function Invoke-Teardown
+{
+	$paths = Get-Paths ''
+	$records = @()
+
+	if ( $All )
+	{
+		if ( Test-Path $paths.RunsRoot )
+		{
+			$records = @(Get-ChildItem $paths.RunsRoot -Filter 'env.json' -Recurse -ErrorAction SilentlyContinue |
+				ForEach-Object { Get-Content $_.FullName -Raw | ConvertFrom-Json })
+		}
+
+		if ( $records.Count -eq 0 ) { Write-Host "No envs to tear down."; return }
+
+		Write-Host "tearing down $($records.Count) env(s): $(($records | ForEach-Object { $_.Feature }) -join ', ')"
+	}
+	else
+	{
+		Assert-FeatureName $Feature
+		$records = @(Read-EnvRecord -Paths (Get-Paths $Feature))
+	}
+
+	foreach ( $record in $records )
+	{
+		Remove-Env -Paths (Get-Paths $record.Feature) -Record $record
 	}
 
 	Write-Host ""
-	Write-Host "env '$Feature' torn down. Run artifacts kept at $($record.RunDir)." -ForegroundColor Green
+	Write-Host "done." -ForegroundColor Green
 }
 
 
@@ -1177,6 +1339,7 @@ switch ( $Command )
 {
 	'setup' { Invoke-Setup }
 	'open' { Invoke-Open }
+	'stop' { Invoke-Stop }
 	'status' { Invoke-Status }
 	'play' { Invoke-Play }
 	'shot' { Invoke-Shot }
