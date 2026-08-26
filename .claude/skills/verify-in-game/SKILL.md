@@ -27,6 +27,14 @@ This is how to answer "did my change take" without guessing. Worked examples fro
   delta from the prefab default is the proof.
 - **`"Children": []`** on the agent's toolgun - the `toolgun_vm` child was gone, so no viewmodel.
 
+**The running session is called `system`, and that is the live world.** In play mode
+`editor_status` reports `ActiveScene: "system"` and `list_scenes` shows it as the `Game` entry
+with a handful of root objects, while `scenes/sandbox.scene` sits alongside it as an inactive
+`Scene` tab. That reads like a menu or a bootstrap shell, but `scene_tree` on it shows
+`MapLoader` → `worldspawn` and the spawn points: it is the map. Measure against `system`, and
+don't conclude from the name that nothing is running - the inactive `sandbox.scene` tab is the
+file on disk, not what is playing.
+
 ## The sbx CLI - what the game does when driven
 
 ```
