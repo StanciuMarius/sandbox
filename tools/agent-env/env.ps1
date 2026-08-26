@@ -21,7 +21,7 @@
 [CmdletBinding()]
 param(
 	[Parameter(Mandatory, Position = 0)]
-	[ValidateSet('setup', 'status', 'play', 'shot', 'mcp', 'teardown')]
+	[ValidateSet('setup', 'open', 'status', 'play', 'shot', 'mcp', 'teardown')]
 	[string]$Command,
 
 	# The env's name. Lowercase, digits and dashes - it becomes a branch, a directory
@@ -314,13 +314,15 @@ function Get-ClaimedPorts
 		Without this check a handful of teardowns would permanently exhaust the two
 		bridge ports.
 	#>
-	param([object]$Paths, [string]$Field)
+	param([object]$Paths, [string]$Field, [string]$ExceptFeature = '')
 
 	if ( -not (Test-Path $Paths.RunsRoot) ) { return @() }
 
 	return @(Get-ChildItem $Paths.RunsRoot -Filter 'env.json' -Recurse -ErrorAction SilentlyContinue |
 		ForEach-Object {
 			$record = Get-Content $_.FullName -Raw | ConvertFrom-Json
+			# Reopening an env shouldn't lose to its own claim from last time.
+			if ( $ExceptFeature -and $record.Feature -eq $ExceptFeature ) { return }
 			if ( -not $record.PSObject.Properties['Worktree'] ) { return }
 			if ( -not (Test-Path $record.Worktree) ) { return }
 			if ( $record.PSObject.Properties[$Field] ) { $record.$Field }
@@ -329,12 +331,20 @@ function Get-ClaimedPorts
 
 function Get-FreePort
 {
-	<# First port in a range that nothing is listening on and no other env has claimed. #>
-	param([object]$Paths, [int]$First, [int]$Last, [string]$Field, [string]$What)
+	<#
+		First port in a range that nothing is listening on and no other env has claimed.
+		Prefer names the port to try first, so a reopened env keeps the number the run
+		record and the worktree's .mcp.json already advertise.
+	#>
+	param([object]$Paths, [int]$First, [int]$Last, [string]$Field, [string]$What,
+		[string]$ExceptFeature = '', [int]$Prefer = 0)
 
-	$claimed = Get-ClaimedPorts -Paths $Paths -Field $Field
+	$claimed = Get-ClaimedPorts -Paths $Paths -Field $Field -ExceptFeature $ExceptFeature
 
-	foreach ( $port in $First..$Last )
+	$candidates = @($First..$Last)
+	if ( $Prefer -ge $First -and $Prefer -le $Last ) { $candidates = @($Prefer) + $candidates }
+
+	foreach ( $port in $candidates )
 	{
 		if ( $claimed -contains $port ) { continue }
 		if ( Test-Port -Port $port -TimeoutMs 100 ) { continue }
@@ -351,11 +361,14 @@ function Get-FreeBridgePort
 		degraded env rather than a broken one, so this reports and carries on: MCP
 		covers everything except driving the game through sbx verbs.
 	#>
-	param([object]$Paths)
+	param([object]$Paths, [string]$ExceptFeature = '', [int]$Prefer = 0)
 
-	$claimed = Get-ClaimedPorts -Paths $Paths -Field 'BridgePort'
+	$claimed = Get-ClaimedPorts -Paths $Paths -Field 'BridgePort' -ExceptFeature $ExceptFeature
 
-	foreach ( $port in $script:BridgePorts )
+	$candidates = @($script:BridgePorts)
+	if ( $script:BridgePorts -contains $Prefer ) { $candidates = @($Prefer) + $candidates }
+
+	foreach ( $port in $candidates )
 	{
 		if ( $claimed -contains $port ) { continue }
 		return $port
@@ -652,18 +665,35 @@ function Set-WorktreeIdent
 		hide the change from git. Surgical string edits rather than a json round trip,
 		so the file an agent reads still looks like the one in the repo.
 	#>
-	param([object]$Paths, [string]$Feature)
+	param([object]$Paths, [string]$Feature, [string]$KnownOriginalIdent = '')
 
 	$file = Join-Path $Paths.Worktree 'sandbox.sbproj'
 	$text = Get-Content $file -Raw
 
 	$identMatch = [regex]::Match($text, '"Ident":\s*"([^"]+)"')
 	if ( -not $identMatch.Success ) { throw "No Ident in $file - has the project format changed?" }
-	$originalIdent = $identMatch.Groups[1].Value
+	$currentIdent = $identMatch.Groups[1].Value
 
 	$orgMatch = [regex]::Match($text, '"Org":\s*"([^"]+)"')
 	if ( -not $orgMatch.Success ) { throw "No Org in $file - has the project format changed?" }
 	$org = $orgMatch.Groups[1].Value
+
+	# Reopening an env whose worktree survived means this file is already rewritten.
+	# Running the edit again would take the isolated Ident to be the original - which
+	# teardown -Purge relies on to tell an env's engine state from the real project's -
+	# and would append the title suffix a second time.
+	if ( $currentIdent -eq $Paths.Ident )
+	{
+		$originalIdent = $KnownOriginalIdent
+		if ( -not $originalIdent )
+		{
+			throw "$file is already set to $currentIdent but the run record doesn't say what it started as. Remove the worktree and reopen to rebuild it from the branch."
+		}
+
+		return [pscustomobject]@{ Org = $org; OriginalIdent = $originalIdent }
+	}
+
+	$originalIdent = $currentIdent
 
 	$text = $text -replace '("Ident":\s*")[^"]+(")', "`${1}$($Paths.Ident)`${2}"
 	$text = $text -replace '("Title":\s*")([^"]*)(")', "`${1}`${2} [$Feature]`${3}"
@@ -733,10 +763,34 @@ function Invoke-Setup
 			-GitArgs @('-C', $paths.Repo, 'worktree', 'add', '-b', $paths.Branch, $paths.Worktree, 'HEAD'))
 	}
 
+	Start-Env -Paths $paths -Feature $Feature -BaseCommit $baseCommit
+}
+
+function Start-Env
+{
+	<#
+		Isolate a worktree, launch its editor and record what came up. Shared by setup and
+		open: the difference between a new env and a reopened one is only where the
+		worktree came from, so everything after that lives here.
+
+		Created and BaseCommit are carried through rather than regenerated, so reopening a
+		run doesn't rewrite the history of when it started or what it branched from.
+	#>
+	param(
+		[object]$Paths,
+		[string]$Feature,
+		[string]$BaseCommit,
+		[string]$Created = '',
+		[int]$PreferPort = 0,
+		[int]$PreferBridgePort = 0,
+		[string]$KnownOriginalIdent = ''
+	)
+
 	# --- isolate
-	$project = Set-WorktreeIdent -Paths $paths -Feature $Feature
-	$port = Get-FreePort -Paths $paths -First $script:PortFirst -Last $script:PortLast -Field 'Port' -What 'MCP'
-	$bridgePort = Get-FreeBridgePort -Paths $paths
+	$project = Set-WorktreeIdent -Paths $Paths -Feature $Feature -KnownOriginalIdent $KnownOriginalIdent
+	$port = Get-FreePort -Paths $Paths -First $script:PortFirst -Last $script:PortLast -Field 'Port' -What 'MCP' `
+		-ExceptFeature $Feature -Prefer $PreferPort
+	$bridgePort = Get-FreeBridgePort -Paths $Paths -ExceptFeature $Feature -Prefer $PreferBridgePort
 
 	Set-WorktreeMcpConfig -Paths $paths -Port $port
 	Set-McpPortCookie -Paths $paths -Port $port
@@ -812,6 +866,9 @@ function Invoke-Setup
 	Set-BridgePin -Port $livePort -BridgePort $bridgePort
 
 	# --- record
+	$createdAt = $Created
+	if ( -not $createdAt ) { $createdAt = (Get-Date).ToString('o') }
+
 	$record = [ordered]@{
 		Feature       = $Feature
 		Branch        = $paths.Branch
@@ -825,7 +882,8 @@ function Invoke-Setup
 		Scene         = $scene
 		Pid           = $process.Id
 		BaseCommit    = $baseCommit
-		Created       = (Get-Date).ToString('o')
+		Created       = $createdAt
+		LastOpened    = (Get-Date).ToString('o')
 	}
 
 	Write-Utf8NoBom -Path $paths.EnvFile -Text ([pscustomobject]$record | ConvertTo-Json -Depth 10)
@@ -852,6 +910,65 @@ function Invoke-Setup
 		Write-Host "  `$env:SBX_PORT = '$bridgePort'"
 		Write-Host "  & '$($paths.Engine)\data\$($project.Org)\$($paths.Ident)#local\agent\sbx.ps1' <verb>"
 	}
+}
+
+function Invoke-Open
+{
+	<#
+		Bring a recorded run back up, by the name of its folder under .agent-runs.
+
+		Teardown keeps the branch and the artifacts but removes the worktree, so most
+		reopens have to rebuild the worktree from the branch. The branch is the work; the
+		worktree is just a checkout of it, and the run record says which one.
+	#>
+	Assert-FeatureName $Feature
+	$paths = Get-Paths $Feature
+	$record = Read-EnvRecord -Paths $paths
+
+	# Already up? Say where, and don't launch a second editor onto the same worktree.
+	$live = Find-EditorPort -ProjectRoot $record.Worktree
+	if ( $live -ne 0 )
+	{
+		$status = Get-EditorStatus -Port $live
+		$playing = 'in edit mode'
+		if ( $null -ne $status -and $status.IsPlaying ) { $playing = "playing '$($status.ActiveScene)'" }
+
+		Write-Host "env '$Feature' is already up on port $live, $playing." -ForegroundColor Green
+		Write-Host "  worktree  $($record.Worktree)"
+		return
+	}
+
+	# --- the branch is what has to exist; the worktree can be rebuilt from it
+	$branchExists = (Invoke-Git -GitArgs @('-C', $paths.Repo, 'show-ref', '--verify', '--quiet', "refs/heads/$($record.Branch)")).ExitCode -eq 0
+
+	if ( -not (Test-Path $record.Worktree) )
+	{
+		if ( -not $branchExists )
+		{
+			throw "Branch $($record.Branch) is gone, and so is $($record.Worktree) - there's nothing left to open. The artifacts in $($record.RunDir) are all that survives this run."
+		}
+
+		Write-Host "worktree is gone - rebuilding it from $($record.Branch)"
+		New-Item -ItemType Directory -Force -Path $paths.EnvsRoot | Out-Null
+
+		[void](Assert-Git -What 'Adding the worktree' `
+			-GitArgs @('-C', $paths.Repo, 'worktree', 'add', $record.Worktree, $record.Branch))
+	}
+
+	$baseCommit = $record.BaseCommit
+	if ( -not $baseCommit ) { $baseCommit = (Assert-Git -What 'Reading HEAD' -GitArgs @('-C', $paths.Repo, 'rev-parse', 'HEAD')).Trim() }
+
+	$created = ''
+	if ( $record.PSObject.Properties['Created'] ) { $created = $record.Created }
+
+	$preferBridge = 0
+	if ( $record.PSObject.Properties['BridgePort'] ) { $preferBridge = $record.BridgePort }
+
+	$knownOriginal = ''
+	if ( $record.PSObject.Properties['OriginalIdent'] ) { $knownOriginal = $record.OriginalIdent }
+
+	Start-Env -Paths $paths -Feature $Feature -BaseCommit $baseCommit -Created $created `
+		-PreferPort $record.Port -PreferBridgePort $preferBridge -KnownOriginalIdent $knownOriginal
 }
 
 function Invoke-Status
@@ -1059,6 +1176,7 @@ function Invoke-Teardown
 switch ( $Command )
 {
 	'setup' { Invoke-Setup }
+	'open' { Invoke-Open }
 	'status' { Invoke-Status }
 	'play' { Invoke-Play }
 	'shot' { Invoke-Shot }
